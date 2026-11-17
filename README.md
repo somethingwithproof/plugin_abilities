@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Thomas Vincent
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 <h1 align="center">
 	<picture>
 		<source media="(prefers-color-scheme: dark)" srcset="images/abilities_logo_dark.png">
