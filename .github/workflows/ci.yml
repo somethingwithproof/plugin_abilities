@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4', '8.5']
+    container: php:${{ matrix.php }}-cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: PHP syntax
+        run: find . -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Registry authorization, schema, and audit tests
+        run: php tests/registry.php
+
+  package:
+    name: Build installable plugin archive
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and inspect archive
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix=abilities/ HEAD > dist/abilities.tar.gz
+          mkdir /tmp/abilities-package
+          tar -xzf dist/abilities.tar.gz -C /tmp/abilities-package
+          test -f /tmp/abilities-package/abilities/INFO
+          test -f /tmp/abilities-package/abilities/setup.php
+          test -f /tmp/abilities-package/abilities/images/abilities_logo.png
+          test ! -d /tmp/abilities-package/abilities/tests
+          test ! -d /tmp/abilities-package/abilities/.github
+          cd dist
+          sha256sum abilities.tar.gz > SHA256SUMS
+      - name: Upload plugin archive
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: abilities-plugin
+          path: dist/*
+          if-no-files-found: error
