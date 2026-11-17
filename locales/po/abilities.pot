@@ -8,3 +8,7 @@ msgstr ""
 #: setup.php
 msgid "Abilities API"
 msgstr ""
+
+#: setup.php
+msgid "Abilities installation is incomplete"
+msgstr ""

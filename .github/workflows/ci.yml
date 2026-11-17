@@ -33,11 +33,15 @@ jobs:
           docker run --rm --network none \
             --volume "$GITHUB_WORKSPACE:/app:ro" --workdir /app "$PHP_IMAGE" \
             sh -c "find . -name '*.php' -print0 | xargs -0 -n1 php -l"
-      - name: Registry authorization, schema, and audit tests
+      - name: Registry, lifecycle, and native provider tests
         run: |
           docker run --rm --network none \
             --volume "$GITHUB_WORKSPACE:/app:ro" --workdir /app "$PHP_IMAGE" \
-            php tests/registry.php
+            sh -eu -c '
+              php tests/registry.php
+              php tests/lifecycle.php
+              php tests/providers.php
+            '
 
   package:
     name: Build installable plugin archive

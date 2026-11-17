@@ -68,11 +68,12 @@ previously discovered the ability.
 |---|---|---|
 | Permission-filtered discovery and execution | [lib/registry.php](lib/registry.php) | [tests/registry.php](tests/registry.php) |
 | Input schemas and audit callbacks | [lib/registry.php](lib/registry.php) | [tests/registry.php](tests/registry.php) |
-| Cacti inventory providers | [lib/providers.php](lib/providers.php) | Exercised in the manual Cacti integration check described under Development and tests |
-| Tokens, realms, and audit storage | [lib/storage.php](lib/storage.php), [tokens.php](tokens.php) | Exercised in the same manual integration check |
+| Cacti inventory providers and extension hook | [lib/providers.php](lib/providers.php) | [tests/providers.php](tests/providers.php) |
+| Installation, enable readiness, and retained tables | [setup.php](setup.php), [lib/storage.php](lib/storage.php) | [tests/lifecycle.php](tests/lifecycle.php) |
 
-The registry checks run in CI. The live Cacti integration check is separate;
-these references do not imply that CI exercises a complete Cacti installation.
+These checks run in CI. Lifecycle and provider tests use fixtures at the Cacti
+helper boundary. The live Cacti integration check is separate; the unit tests
+do not exercise a complete Cacti installation.
 
 ## How it stays safe
 
@@ -241,13 +242,15 @@ GitHub's automatic source archives use a different top-level directory name.
 
 ```console
 php tests/registry.php
+php tests/lifecycle.php
+php tests/providers.php
 git archive --format=tar.gz --prefix=abilities/ HEAD > abilities.tar.gz
 ```
 
-CI lints PHP and runs the registry tests on PHP 8.2, 8.3, 8.4, and 8.5. It
-also builds an installable `abilities/` archive and checksum as workflow
-artifacts. The Python
-repository contains transport and MCP subprocess tests. The initial integration
+CI lints PHP and runs registry, lifecycle, and provider tests on PHP 8.2 through
+8.5. It also builds an installable `abilities/` archive and checksum as workflow
+artifacts. The Python repository contains transport and MCP subprocess tests.
+The initial integration
 check additionally used isolated Cacti/MariaDB containers to exercise discovery,
 execution, CSRF, realm/device permissions, disabled users, token expiry and
 revocation, and audit outcomes. No production installation is modified by setup

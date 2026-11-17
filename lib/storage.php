@@ -5,6 +5,8 @@
 require_once __DIR__ . '/registry.php';
 
 function abilities_install_schema() : void {
+	// Cacti's table registration also schedules tables for removal on uninstall.
+	// These tables intentionally survive uninstall for token and audit retention.
 	$queries = [
 		'CREATE TABLE IF NOT EXISTS plugin_abilities_token (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -24,6 +26,7 @@ function abilities_install_schema() : void {
 			finished_at BIGINT UNSIGNED NULL
 		) ENGINE=InnoDB'
 	];
+
 	foreach ($queries as $query) {
 		if (!db_execute($query)) {
 			throw new RuntimeException('Abilities schema creation failed');
@@ -39,6 +42,7 @@ function abilities_has_realm(int $userId) : bool {
 	// Refresh the mode used by Cacti's device helper, not a prior session copy.
 	read_config_option('graph_auth_method', true);
 	$id = db_fetch_cell_prepared('SELECT id FROM plugin_realms WHERE plugin = ? AND file = ?', ['abilities', 'api.php']);
+
 	return $id !== false && (int) $id > 0 && is_realm_allowed((int) $id + 100, $userId);
 }
 
@@ -47,22 +51,26 @@ function abilities_authenticate(string $header) : array {
 		throw new AbilitiesError(401, 'invalid_token');
 	}
 	$hash = hash('sha256', $matches[1]);
-	$row = db_fetch_row_prepared('SELECT t.id, t.user_id, t.token_hash, t.scopes
+	$row  = db_fetch_row_prepared('SELECT t.id, t.user_id, t.token_hash, t.scopes
 		FROM plugin_abilities_token AS t
 		JOIN user_auth AS u ON u.id = t.user_id
 		WHERE t.token_hash = ? AND t.revoked = 0 AND t.expires_at > ? AND u.enabled = ?',
 		[$hash, time(), 'on']);
+
 	if (!$row || !hash_equals($row['token_hash'], $hash)) {
 		throw new AbilitiesError(401, 'invalid_token');
 	}
 	$userId = (int) $row['user_id'];
+
 	if (!abilities_has_realm($userId)) {
 		throw new AbilitiesError(403, 'realm_required');
 	}
 	$scopes = json_decode($row['scopes'], true, 16, JSON_THROW_ON_ERROR);
+
 	if (!is_array($scopes) || !array_is_list($scopes)) {
 		throw new AbilitiesError(401, 'invalid_token');
 	}
+
 	return ['token_id' => (int) $row['id'], 'user_id' => $userId, 'scopes' => $scopes];
 }
 
@@ -75,6 +83,7 @@ function abilities_audit(array $principal, string $id, string $name, string $out
 		$ok = db_execute_prepared('UPDATE plugin_abilities_audit SET outcome = ?, finished_at = ? WHERE request_id = ?',
 			[$outcome, time(), $id]);
 	}
+
 	if (!$ok) {
 		throw new AbilitiesError(503, 'audit_unavailable');
 	}
