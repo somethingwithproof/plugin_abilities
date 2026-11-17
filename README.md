@@ -1,18 +1,43 @@
 <h1 align="center">
-  <img src="images/abilities_logo.png" width="360" alt="Cacti Abilities: a green cactus with a shield and keyhole.">
+	<picture>
+		<source media="(prefers-color-scheme: dark)" srcset="images/abilities_logo_dark.png">
+		<img src="images/abilities_logo.png" width="360" alt="Cacti Abilities: a cactus with a shield. Discover. Authorize. Execute.">
+	</picture>
 </h1>
 
 <p align="center">
-  <a href="https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml"><img src="https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI"></a>
+	<a href="https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml"><img src="https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI"></a>
+	<a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue" alt="License: GPL-2.0-or-later"></a>
+	<img src="https://img.shields.io/badge/Cacti-1.2.31%2B-2e7d32" alt="Cacti 1.2.31+">
+	<img src="https://img.shields.io/badge/PHP-8.2%2B-777bb4?logo=php&amp;logoColor=white" alt="PHP 8.2+">
+	<img src="https://img.shields.io/badge/Abilities_API-v1-2e7d32" alt="Abilities API v1">
 </p>
 
-An installable Cacti plugin that exposes a permission-filtered abilities API.
-The separate [cacti-mcp Python adapter](https://github.com/somethingwithproof/cacti-mcp)
-turns these abilities into MCP tools. Cacti remains responsible for all
-authorization and execution; the PHP plugin has no MCP or Python dependency.
+Cacti Abilities is a Cacti plugin that exposes named, permission-filtered
+operations to external clients through an HTTPS API. Cacti owns authorization
+and execution; the separate [cacti-mcp adapter](https://github.com/somethingwithproof/cacti-mcp)
+turns those operations into MCP tools.
 
-Version 0.1 provides read-only inventory. Doctor diagnostics, repair execution,
-and other mutations are future work.
+**Status: in development, before 1.0.** Version 0.1.0 provides read-only device
+inventory and installation versions. There is no tagged release yet. Doctor
+diagnostics, repairs, and other mutations are future work.
+
+## What it exposes
+
+| Name | Arguments | Required Cacti realm |
+| --- | --- | --- |
+| `cacti.system.info` | `{}` | Settings/Utilities (15) |
+| `cacti.devices.list` | Optional `limit` (1–100), `offset` (0–1,000,000) | Sites/Devices/Data (3) |
+| `cacti.devices.get` | Required positive integer `id` | Sites/Devices/Data (3) |
+
+Every call also requires the plugin realm and exact token scope. The device
+providers use Cacti's allowed-device helper with the explicit token-owner ID,
+including the site's configured graph/device permission policy. Returned fields
+are limited to ID, description, hostname, disabled state, and numeric status.
+SNMP credentials and other database columns are excluded.
+
+The [API contract](https://github.com/somethingwithproof/cacti-mcp/blob/develop/docs/api.md)
+documents discovery, execution envelopes, errors, and limits.
 
 ## Use cases
 
@@ -36,6 +61,32 @@ For example, a service account scoped only to `cacti.devices.list` can produce
 an inventory report, but cannot call `cacti.system.info`. Removing its Cacti
 permissions or revoking its token blocks subsequent requests, even if a client
 previously discovered the ability.
+
+## Code and test map
+
+| Behavior | Implementation | Test evidence in this repository |
+|---|---|---|
+| Permission-filtered discovery and execution | [lib/registry.php](lib/registry.php) | [tests/registry.php](tests/registry.php) |
+| Input schemas and audit callbacks | [lib/registry.php](lib/registry.php) | [tests/registry.php](tests/registry.php) |
+| Cacti inventory providers | [lib/providers.php](lib/providers.php) | Exercised in the manual Cacti integration check described under Development and tests |
+| Tokens, realms, and audit storage | [lib/storage.php](lib/storage.php), [tokens.php](tokens.php) | Exercised in the same manual integration check |
+
+The registry checks run in CI. The live Cacti integration check is separate;
+these references do not imply that CI exercises a complete Cacti installation.
+
+## How it stays safe
+
+- Each request needs a valid scoped bearer token owned by an enabled Cacti user.
+  The plugin realm, provider realms, and device permissions still apply.
+- Inputs must match a supported closed-object schema. Providers return bounded
+  result objects, and the built-in inventory providers omit credentials.
+- Cacti's session and CSRF checks remain in place. A browser cookie alone
+  never grants API access.
+- Execution requires a persisted audit start record. Audit rows contain
+  identity and outcome fields, without arguments, results, or token values.
+
+Version 0.1 exposes read-only domain operations. Session and audit records are
+still written when a client uses the API.
 
 ## The WordPress Abilities API example
 
@@ -77,14 +128,21 @@ Use the API directly for an HTTPS integration. Use `cacti-mcp` when the client
 expects MCP tools. Adding a provider to Cacti makes its permitted read-only
 abilities discoverable through the adapter without adding a Python tool handler.
 
-## Requirements and installation
+## Installation
 
 Requires Cacti 1.2.31 or later, PHP 8.2 or later, and the main poller.
 Cacti authentication must be enabled; the API fails closed when it is off.
 The integration has been exercised with Cacti 1.2.31, PHP 8.2, and MariaDB 11.8.
 Other Cacti versions have not yet received full integration testing.
 
-1. Copy the repository contents into Cacti's `plugins/abilities/` directory.
+For a source checkout:
+
+```console
+cd /path/to/cacti/plugins
+git clone https://github.com/somethingwithproof/plugin_abilities.git abilities
+```
+
+1. Place the repository contents in Cacti's `plugins/abilities/` directory.
    The directory name must be `abilities`, not `plugin_abilities`.
 2. Install and enable **Cacti Abilities** in Plugin Management.
 3. Grant **Abilities API** to a dedicated enabled Cacti user. No user receives
@@ -104,13 +162,13 @@ The API retains Cacti's normal session and CSRF protection. Discovery returns a
 CSRF token; execution uses a form POST with the session cookie and bearer header.
 Cookie authentication alone never grants API access.
 
-## Tokens
+## Command line
 
 Use an OS account authorized to administer this Cacti installation. Generate a
 random 256-bit token, retain it in your secret manager, and supply it through
 `CACTI_MCP_TOKEN`. The CLI never prints the value or stores it in plaintext.
 
-```sh
+```console
 export CACTI_MCP_TOKEN="$(openssl rand -hex 32)"
 # Store this value in your secret manager before ending this shell session.
 php plugins/abilities/tokens.php --create=mcp_reader \
@@ -123,23 +181,6 @@ Creation validates the enabled user, plugin realm, and current permission for
 every named scope. Expiry is mandatory, defaults to 30 days, and is capped at
 90 days. Wildcards are unsupported. Rotation creates a new token and revokes
 the old token ID. Revocation and disabled users take effect on the next request.
-
-## Abilities
-
-| Name | Arguments | Required Cacti realm |
-| --- | --- | --- |
-| `cacti.system.info` | `{}` | Settings/Utilities (15) |
-| `cacti.devices.list` | Optional `limit` (1–100), `offset` (0–1,000,000) | Sites/Devices/Data (3) |
-| `cacti.devices.get` | Required positive integer `id` | Sites/Devices/Data (3) |
-
-Every call also requires the plugin realm and exact token scope. The device
-providers use Cacti's allowed-device helper with the explicit token-owner ID,
-including the site's configured graph/device permission policy. Returned fields
-are limited to ID, description, hostname, disabled state, and numeric status.
-SNMP credentials and other database columns are excluded.
-
-The [API contract](https://github.com/somethingwithproof/cacti-mcp/blob/develop/docs/api.md)
-documents discovery, execution envelopes, errors, and limits.
 
 ## Provider extension
 
@@ -187,22 +228,38 @@ both plugin tables for administrator retention/cleanup. Reinstallation is
 idempotent and does not reactivate revoked tokens. Back up these tables with the
 Cacti database and apply an appropriate audit retention policy externally.
 
-## Verification and packaging
+## Releases
 
-```sh
+The plugin version is recorded in [INFO](INFO). Until tagged releases are
+available, use a source checkout or the `abilities-plugin` artifact from a
+successful [CI run](https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml).
+The artifact contains `abilities.tar.gz` and `SHA256SUMS`. Verify the checksum
+before extracting the `abilities/` directory into Cacti's `plugins/` directory.
+GitHub's automatic source archives use a different top-level directory name.
+
+## Development and tests
+
+```console
 php tests/registry.php
 git archive --format=tar.gz --prefix=abilities/ HEAD > abilities.tar.gz
 ```
 
-CI lints PHP and runs the registry tests on PHP 8.2, 8.3, 8.4, and 8.5. It also builds an installable
-`abilities/` archive and checksum as workflow artifacts. The Python
+CI lints PHP and runs the registry tests on PHP 8.2, 8.3, 8.4, and 8.5. It
+also builds an installable `abilities/` archive and checksum as workflow
+artifacts. The Python
 repository contains transport and MCP subprocess tests. The initial integration
 check additionally used isolated Cacti/MariaDB containers to exercise discovery,
 execution, CSRF, realm/device permissions, disabled users, token expiry and
 revocation, and audit outcomes. No production installation is modified by setup
 of the Python adapter.
 
-GPL-2.0-or-later; see [LICENSE](LICENSE).
+## Contributing
+
+Pull requests go to `develop`. Keep production code compatible with PHP 8.2
+and use Cacti's style: tabs, single-quoted strings, and Cacti database and
+permission helpers. Add registry tests for changed validation or authorization
+behavior, and sign off commits with `git commit -s`. Coordinate API contract
+changes with the Python adapter and [its API documentation](https://github.com/somethingwithproof/cacti-mcp/blob/develop/docs/api.md).
 
 ## Source naming
 
@@ -212,3 +269,8 @@ tables use that name. The MCP adapter must use
 `/plugins/abilities/api.php`. There is no compatibility endpoint for the earlier
 local prototype. Do not rename tables on an existing installation without
 backing up its token and audit data and planning a migration.
+
+## License
+
+Copyright (C) 2026 Thomas Vincent. Released under the GNU General Public
+License, version 2 or later. See [LICENSE](LICENSE).
