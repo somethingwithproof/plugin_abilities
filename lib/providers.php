@@ -93,7 +93,7 @@ function mcp_register_builtins(AbilitiesRegistry $registry) : void {
 			'additionalProperties' => false
 		],
 		'annotations' => $annotations,
-		'permission'  => fn (int $user) => is_realm_allowed(15, $user),
+		'permission'  => fn (int $user) => is_realm_allowed(MCP_BUILTIN_REALMS['cacti-get-system-info'], $user),
 		'execute'     => function () {
 			global $config;
 			$info = plugin_mcp_version();
@@ -129,7 +129,7 @@ function mcp_register_builtins(AbilitiesRegistry $registry) : void {
 			'additionalProperties' => false
 		],
 		'annotations' => $annotations,
-		'permission'  => fn (int $user) => is_realm_allowed(3, $user),
+		'permission'  => fn (int $user) => is_realm_allowed(MCP_BUILTIN_REALMS['cacti-list-devices'], $user),
 		'execute'     => function (int $user, stdClass $args) {
 			$filter      = $args->filter ?? '';
 			$orderBy     = $args->orderBy ?? '';
@@ -166,7 +166,7 @@ function mcp_register_builtins(AbilitiesRegistry $registry) : void {
 			'additionalProperties' => false
 		],
 		'annotations' => $annotations,
-		'permission'  => fn (int $user) => is_realm_allowed(3, $user),
+		'permission'  => fn (int $user) => is_realm_allowed(MCP_BUILTIN_REALMS['cacti-get-device'], $user),
 		'execute'     => function (int $user, stdClass $args) {
 			$total = -1;
 			$rows  = get_allowed_devices('', 'h1.id ASC', '1', $total, $user, (int) substr($args->name, strlen('devices/')));
@@ -189,7 +189,7 @@ function mcp_register_builtins(AbilitiesRegistry $registry) : void {
 function mcp_dispatch_ability_hooks(AbilitiesRegistry $registry) : void {
 	global $plugins_integrated;
 
-	$hooks = db_fetch_assoc_prepared('SELECT name, file, function FROM plugin_hooks WHERE hook = ? AND status = 1',
+	$hooks = db_fetch_assoc_prepared('SELECT name, file, function FROM plugin_hooks WHERE hook = ? AND status = 1 ORDER BY name, function',
 		['abilities_register']);
 
 	foreach ($hooks ?: [] as $hook) {
@@ -226,7 +226,7 @@ function mcp_dispatch_ability_hooks(AbilitiesRegistry $registry) : void {
 			($hook['function'])(new AbilitiesRegistrar($scratch, $name));
 			$registry->adopt($scratch);
 		} catch (Throwable $error) {
-			cacti_log('MCP: ability registration failed for plugin ' . $name, false, 'MCP');
+			cacti_log('MCP: ability registration failed for plugin ' . $name . ' (' . $error::class . ')', false, 'MCP');
 		}
 	}
 }

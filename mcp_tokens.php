@@ -283,6 +283,8 @@ if ($mcp_action === 'revoke') {
 			} else {
 				mcp_self_error(__('That token is not one of your active tokens.', 'mcp'));
 			}
+		} catch (McpRevokeAuditError $error) {
+			mcp_self_error(__('The tokens were revoked, but the audit entry could not be written.', 'mcp'));
 		} catch (InvalidArgumentException | RuntimeException $error) {
 			mcp_self_error(__('The token could not be revoked.', 'mcp'));
 		}

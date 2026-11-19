@@ -322,7 +322,7 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 function mcp_admin_audit_tab() : void {
 	$filters = mcp_admin_paging_filters([
 		'user_id' => ['filter' => FILTER_VALIDATE_INT, 'options' => ['options' => ['min_range' => -1]], 'pageset' => true, 'default' => '-1'],
-		'ability' => ['filter' => FILTER_VALIDATE_REGEXP, 'options' => ['options' => ['regexp' => '/^(?=.{1,64}$)[a-z][a-z0-9]*(-[a-z0-9]+){1,7}$/D']], 'pageset' => true, 'default' => ''],
+		'ability' => ['filter' => FILTER_VALIDATE_REGEXP, 'options' => ['options' => ['regexp' => AbilitiesRegistry::ID_PATTERN]], 'pageset' => true, 'default' => ''],
 		'outcome' => ['filter' => FILTER_VALIDATE_REGEXP, 'options' => ['options' => ['regexp' => '/^(' . implode('|', MCP_AUDIT_OUTCOMES) . ')$/D']], 'pageset' => true, 'default' => '']
 	]);
 	validate_store_request_vars($filters, 'sess_mcp_audit');
@@ -453,22 +453,18 @@ if ($mcp_action === 'actions' || $mcp_action === 'apply') {
 
 	if ($mcp_parsed['action'] === 'revoke') {
 		try {
-			mcp_token_revoke($mcp_parsed['ids']);
+			// An admin may revoke any token; only tokens that were active are counted and audited.
+			$mcp_revoked = mcp_token_revoke_audited(mcp_admin_actor(), $mcp_parsed['ids']);
+
+			if ($mcp_revoked > 0) {
+				mcp_admin_info(sprintf(__n('%d token was revoked.', '%d tokens were revoked.', $mcp_revoked, 'mcp'), $mcp_revoked));
+			} else {
+				mcp_admin_error(__('None of the selected tokens are active.', 'mcp'));
+			}
+		} catch (McpRevokeAuditError $error) {
+			mcp_admin_error(__('The tokens were revoked, but the audit entry could not be written.', 'mcp'));
 		} catch (InvalidArgumentException | RuntimeException $error) {
 			mcp_admin_error(__('The tokens could not be revoked.', 'mcp'));
-			$mcp_parsed['ids'] = [];
-		}
-
-		try {
-			foreach ($mcp_parsed['ids'] as $mcp_id) {
-				mcp_audit_admin(mcp_admin_actor(), $mcp_id, 'token-revoke');
-			}
-
-			if ($mcp_parsed['ids'] !== []) {
-				mcp_admin_info(__('The selected tokens were revoked.', 'mcp'));
-			}
-		} catch (RuntimeException $error) {
-			mcp_admin_error(__('The tokens were revoked, but the audit entry could not be written.', 'mcp'));
 		}
 	} elseif (mcp_admin_apply_exposure($mcp_parsed)) {
 		mcp_admin_info(__('The exposure settings were saved.', 'mcp'));

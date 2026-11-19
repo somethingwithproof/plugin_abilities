@@ -6,12 +6,9 @@
 
 require_once __DIR__ . '/storage.php';
 
-/** Realm IDs the built-in abilities check; keep in step with lib/providers.php. Plugin abilities declare their own. */
-const MCP_ADMIN_BUILTIN_REALMS = ['cacti-get-system-info' => 15, 'cacti-list-devices' => 3, 'cacti-get-device' => 3];
-
 /** Display name of the realm an ability needs, from Cacti's realm names; blank when the registry cannot say. */
 function mcp_admin_realm_name(array $ability, array $realmNames) : string {
-	$realm = MCP_ADMIN_BUILTIN_REALMS[$ability['id']] ?? null;
+	$realm = MCP_BUILTIN_REALMS[$ability['id']] ?? null;
 
 	return $realm === null ? '' : (string) ($realmNames[$realm] ?? '');
 }
@@ -86,17 +83,34 @@ function mcp_admin_may_create_for(int $actor, int $target, bool $hasUserAdmin) :
 	return $actor > 0 && $target > 0 && ($target === $actor || $hasUserAdmin);
 }
 
+/** Open create forms keep their nonces side by side, so a second tab does not invalidate the first. */
+const MCP_ADMIN_NONCE_SLOTS = 5;
+
 /** Issue a one-time form nonce into $session (Cacti's session array). It is not the token. */
 function mcp_admin_nonce_issue(array &$session) : string {
-	return $session['mcp_create_nonce'] = bin2hex(random_bytes(16));
+	$issued   = array_values(array_filter($session['mcp_create_nonces'] ?? [], 'is_string'));
+	$nonce    = bin2hex(random_bytes(16));
+	$issued[] = $nonce;
+
+	$session['mcp_create_nonces'] = array_slice($issued, -MCP_ADMIN_NONCE_SLOTS);
+
+	return $nonce;
 }
 
-/** Consume the nonce: true once for the issued value, false for a reused, missing, or wrong one. */
+/** Consume the nonce: true once for an issued value, false for a reused, missing, or wrong one. */
 function mcp_admin_nonce_consume(array &$session, string $given) : bool {
-	$issued = $session['mcp_create_nonce'] ?? null;
-	unset($session['mcp_create_nonce']);
+	$issued = $session['mcp_create_nonces'] ?? [];
+	$found  = false;
 
-	return is_string($issued) && $given !== '' && hash_equals($issued, $given);
+	foreach (is_array($issued) ? $issued : [] as $index => $nonce) {
+		if ($given !== '' && is_string($nonce) && hash_equals($nonce, $given)) {
+			unset($issued[$index]);
+			$found = true;
+		}
+	}
+	$session['mcp_create_nonces'] = array_values($issued);
+
+	return $found;
 }
 
 /** Shown by the console and the self-service page when a token is refused for its owner. */
@@ -127,20 +141,10 @@ function mcp_with_session(callable $fn) : mixed {
  *
  * @param list<int> $ids
  * @return int tokens revoked
+ * @throws McpRevokeAuditError when the tokens were revoked but not all audit rows were written
  */
 function mcp_self_revoke(int $userId, array $ids) : int {
-	$ids = mcp_token_revocable($ids, $userId);
-
-	if ($ids === []) {
-		return 0;
-	}
-	$changed = mcp_token_revoke($ids, $userId);
-
-	foreach ($ids as $id) {
-		mcp_audit_admin($userId, $id, 'token-revoke');
-	}
-
-	return $changed;
+	return mcp_token_revoke_audited($userId, $ids, $userId);
 }
 
 /**

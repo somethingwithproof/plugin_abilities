@@ -33,6 +33,8 @@ check(mcp_normalize_public_url('http://127.0.0.1/cacti') === 'http://127.0.0.1/c
 check(mcp_normalize_public_url('http://localhost:80') === 'http://localhost', 'http default port dropped');
 check(mcp_normalize_public_url('http://[::1]:8443/cacti') === 'http://[::1]:8443/cacti', 'http IPv6 loopback');
 check(mcp_normalize_public_url('https://[::1]:8443/cacti') === 'https://[::1]:8443/cacti', 'https IPv6 loopback');
+check(mcp_normalize_public_url('http://[0:0:0:0:0:0:0:1]:8443/cacti') === 'http://[0:0:0:0:0:0:0:1]:8443/cacti', 'http long-form IPv6 loopback');
+check(mcp_normalize_public_url('http://[::2]/cacti') === null, 'http IPv6 non-loopback near ::1');
 check(mcp_normalize_public_url('https://[2001:DB8::1]/cacti') === 'https://[2001:db8::1]/cacti', 'IPv6 host lowercased');
 check(mcp_normalize_public_url('http://[2001:db8::1]/cacti') === null, 'http non-loopback IPv6');
 

@@ -35,6 +35,9 @@ class AbilitiesError extends RuntimeException {
 	}
 }
 
+/** Realm IDs the built-in abilities check. lib/providers.php enforces them and the console shows them. Plugin abilities declare their own. */
+const MCP_BUILTIN_REALMS = ['cacti-get-system-info' => 15, 'cacti-list-devices' => 3, 'cacti-get-device' => 3];
+
 /**
  * Log a failure the caller only sees as a generic error. Only the ability id, a fixed reason, and the
  * exception class are written: never the message, arguments, or token. Skipped where Cacti is not loaded.
@@ -168,7 +171,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 }
 
 class AbilitiesRegistry {
-	private const ID_PATTERN       = '/^[a-z][a-z0-9]*(-[a-z0-9]+){1,7}$/D';
+	public const ID_PATTERN        = '/^(?=.{1,64}$)[a-z][a-z0-9]*(-[a-z0-9]+){1,7}$/D';
 	private const CATEGORY_PATTERN = '/^[a-z][a-z0-9-]{0,31}$/D';
 	private const ANNOTATIONS      = ['readOnly' => true, 'destructive' => false, 'idempotent' => true];
 	private const KEYS             = ['label', 'description', 'category', 'input_schema', 'output_schema', 'annotations', 'permission', 'execute'];
@@ -181,7 +184,7 @@ class AbilitiesRegistry {
 
 	/** Whether $id is a well-formed ability identifier. */
 	public static function isValidId(string $id) : bool {
-		return strlen($id) <= 64 && preg_match(self::ID_PATTERN, $id) === 1;
+		return preg_match(self::ID_PATTERN, $id) === 1;
 	}
 
 	/** Set the exposure policy, callable(string $id, string $namespace): bool. Without one, every ability is exposed. */

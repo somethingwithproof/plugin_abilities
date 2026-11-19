@@ -90,6 +90,10 @@ foreach (['["cacti.devices.get"]', '["abilities:read","cacti.devices.get"]', '[]
 	rejects(fn () => mcp_authenticate('Bearer ' . $token), 'INVALID_TOKEN');
 }
 
+// a row whose stored hash differs from the presented token's hash is refused
+$row = ['id' => '4', 'user_id' => '7', 'scopes' => '["abilities:read"]', 'token_hash' => str_repeat('0', 64)];
+rejects(fn () => mcp_authenticate('Bearer ' . $token), 'INVALID_TOKEN');
+
 $row = null;
 rejects(fn () => mcp_authenticate('Bearer ' . $token), 'INVALID_TOKEN');
 $writes = [];
@@ -117,10 +121,14 @@ $writes = [];
 
 // mcp_set_exposure
 mcp_set_exposure(['cacti-list-devices', 'thold-list-thresholds', 'thold-list-thresholds'], true);
-check(count($writes) === 2 && $writes[0][1][0] === 'cacti-list-devices' && $writes[0][1][1] === 1 && $writes[1][1][1] === 1
-	&& str_contains($writes[0][0], 'ON DUPLICATE KEY UPDATE') && !str_contains($writes[0][0], 'cacti-list-devices'), 'Exposure upsert uses bound parameters');
+check(count($writes) === 1 && array_slice($writes[0][1], 0, 2) === ['cacti-list-devices', 1] && array_slice($writes[0][1], 3, 2) === ['thold-list-thresholds', 1]
+	&& count($writes[0][1]) === 6 && str_contains($writes[0][0], 'ON DUPLICATE KEY UPDATE') && !str_contains($writes[0][0], 'cacti-list-devices'),
+	'Exposure upsert is one statement with bound parameters');
 mcp_set_exposure(['thold-list-thresholds'], false);
-check($writes[2][1][1] === 0, 'Hiding stores zero');
+check($writes[1][1][1] === 0, 'Hiding stores zero');
+$before = count($writes);
+mcp_set_exposure([], true);
+check(count($writes) === $before, 'Nothing to change writes nothing');
 $writes = [];
 
 foreach ([["x'; DROP TABLE t; --"], ['Cacti-list-devices'], ["cacti-list-devices\n"], ['cacti'], [str_repeat('a', 65)], [''], [5], ['cacti-list-devices', 'bad id']] as $bad) {

@@ -197,15 +197,24 @@ function mcp_set_exposure(array $ids, bool $exposed) : void {
 			throw new InvalidArgumentException('Invalid ability ID');
 		}
 	}
-	$now = time();
+	$ids = array_values(array_unique($ids));
 
+	if ($ids === []) {
+		return;
+	}
+	$now    = time();
+	$params = [];
+
+	foreach ($ids as $id) {
+		array_push($params, $id, $exposed ? 1 : 0, $now);
+	}
+
+	// One statement, so a bulk change is applied whole or not at all.
 	try {
-		foreach (array_unique($ids) as $id) {
-			if (!db_execute_prepared('INSERT INTO plugin_mcp_ability (id, exposed, updated_at) VALUES (?, ?, ?)
-				ON DUPLICATE KEY UPDATE exposed = VALUES(exposed), updated_at = VALUES(updated_at)',
-				[$id, $exposed ? 1 : 0, $now])) {
-				throw new RuntimeException('MCP exposure update failed');
-			}
+		if (!db_execute_prepared('INSERT INTO plugin_mcp_ability (id, exposed, updated_at) VALUES '
+			. implode(', ', array_fill(0, count($ids), '(?, ?, ?)'))
+			. ' ON DUPLICATE KEY UPDATE exposed = VALUES(exposed), updated_at = VALUES(updated_at)', $params)) {
+			throw new RuntimeException('MCP exposure update failed');
 		}
 	} finally {
 		mcp_exposure_map(true);
@@ -303,9 +312,13 @@ function mcp_token_create_audited(int $userId, int $days, int $actor) : string {
 	$id    = mcp_token_id($token);
 
 	try {
+		if ($id < 1) {
+			throw new RuntimeException('MCP token lookup failed');
+		}
 		mcp_audit_admin($actor, $id, 'token-create');
 	} catch (RuntimeException $error) {
-		mcp_token_revoke([$id]);
+		// By value, not ID: the lookup that failed is the reason an ID may be missing.
+		db_execute_prepared('UPDATE plugin_mcp_token SET revoked = 1 WHERE token_hash = ?', [mcp_token_hash($token)]);
 
 		throw $error;
 	}
@@ -366,6 +379,42 @@ function mcp_token_revoke(array $ids, ?int $ownerId = null) : int {
 	}
 
 	return (int) db_affected_rows();
+}
+
+/** The tokens were revoked but at least one audit row could not be written. */
+class McpRevokeAuditError extends RuntimeException {
+	public function __construct(public int $revoked) {
+		parent::__construct('MCP audit write failed after revocation');
+	}
+}
+
+/**
+ * Revoke the active tokens among $ids and audit each one actually revoked, attributed to $actor.
+ * Unknown and already revoked IDs are skipped without a trace. With $ownerId only that user's tokens change.
+ *
+ * @param list<int> $ids
+ * @return int tokens revoked
+ * @throws McpRevokeAuditError when the tokens were revoked but an audit row could not be written
+ * @throws InvalidArgumentException for a malformed ID
+ * @throws RuntimeException when the lookup or update fails
+ */
+function mcp_token_revoke_audited(int $actor, array $ids, ?int $ownerId = null) : int {
+	$ids = mcp_token_revocable($ids, $ownerId);
+
+	if ($ids === []) {
+		return 0;
+	}
+	$changed = mcp_token_revoke($ids, $ownerId);
+
+	try {
+		foreach ($ids as $id) {
+			mcp_audit_admin($actor, $id, 'token-revoke');
+		}
+	} catch (RuntimeException $error) {
+		throw new McpRevokeAuditError($changed);
+	}
+
+	return $changed;
 }
 
 /** @param list<int> $ids */

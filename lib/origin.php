@@ -51,7 +51,12 @@ function mcp_parse_url(string $url) : ?array {
 }
 
 function mcp_is_loopback_host(string $host) : bool {
-	return in_array($host, ['localhost', '127.0.0.1', '[::1]'], true);
+	if ($host !== '' && $host[0] === '[') {
+		// Any spelling of ::1, such as [0:0:0:0:0:0:0:1].
+		return inet_pton(substr($host, 1, -1)) === inet_pton('::1');
+	}
+
+	return in_array($host, ['localhost', '127.0.0.1'], true);
 }
 
 function mcp_origin_string(array $parts) : string {

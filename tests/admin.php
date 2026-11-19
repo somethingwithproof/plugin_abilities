@@ -222,10 +222,14 @@ check(mcp_admin_may_create_for(0, 0, true) === false && mcp_admin_may_create_for
 // one-time form nonce
 $session = [];
 $nonce   = mcp_admin_nonce_issue($session);
-check(preg_match('/^[a-f0-9]{32}$/D', $nonce) === 1 && $nonce !== mcp_admin_nonce_issue($session), 'Nonce is random hex, a new issue replaces the old');
-$nonce = mcp_admin_nonce_issue($session);
+$other   = mcp_admin_nonce_issue($session);
+check(preg_match('/^[a-f0-9]{32}$/D', $nonce) === 1 && $nonce !== $other, 'Nonce is random hex');
 check(mcp_admin_nonce_consume($session, 'wrong') === false, 'A wrong nonce is refused');
-check(mcp_admin_nonce_consume($session, $nonce) === false, 'A wrong attempt also spends the nonce');
+check(mcp_admin_nonce_consume($session, $nonce) === true && mcp_admin_nonce_consume($session, $other) === true, 'Two open forms both work, each once');
+foreach (range(1, MCP_ADMIN_NONCE_SLOTS + 1) as $unused) {
+	$last = mcp_admin_nonce_issue($session);
+}
+check(count($session['mcp_create_nonces']) === MCP_ADMIN_NONCE_SLOTS && mcp_admin_nonce_consume($session, $last) === true, 'The oldest forms age out');
 $nonce = mcp_admin_nonce_issue($session);
 check(mcp_admin_nonce_consume($session, $nonce) === true, 'The issued nonce is accepted once');
 check(mcp_admin_nonce_consume($session, $nonce) === false, 'A reused nonce is refused');

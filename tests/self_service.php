@@ -66,6 +66,10 @@ function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true,
 	}
 
 	if (str_starts_with($sql, 'SELECT id FROM plugin_mcp_token WHERE token_hash')) {
+		if ($GLOBALS['hideTokenIds'] ?? false) {
+			return false;
+		}
+
 		foreach ($tokens as $row) {
 			if ($row['token_hash'] === $params[0]) {
 				return $row['id'];
@@ -124,6 +128,17 @@ function db_execute_prepared($sql, $params = [], $log = true, $db_conn = false) 
 			return false;
 		}
 		$audit[] = ['token_id' => $params[1], 'user_id' => $params[2], 'ability' => $params[3], 'outcome' => $params[4]];
+
+		return true;
+	}
+
+	if ($sql === 'UPDATE plugin_mcp_token SET revoked = 1 WHERE token_hash = ?') {
+		foreach ($tokens as &$row) {
+			if ($row['token_hash'] === $params[0]) {
+				$row['revoked'] = '1';
+			}
+		}
+		unset($row);
 
 		return true;
 	}
@@ -225,6 +240,26 @@ check($audit === [['token_id' => 1, 'user_id' => 2, 'ability' => 'mcp-token-revo
 check(mcp_self_revoke(2, [1]) === 0 && count($audit) === 1, 'Revoking again changes and audits nothing');
 check(mcp_token_revoke([2]) === 1 && $tokens[1]['revoked'] === '1', 'The admin path (no owner) revokes any token and returns the count');
 
+// an audit failure after a revoke is reported as such, with the real count
+$tokens = [];
+mcp_token_create(2, 30);
+mcp_token_create(6, 30);
+$audit     = [];
+$failAudit = true;
+
+try {
+	mcp_token_revoke_audited(1, [1, 2, 999]);
+
+	throw new LogicException('An audit failure must surface');
+} catch (McpRevokeAuditError $error) {
+	check($error->revoked === 2 && $tokens[0]['revoked'] === '1' && $tokens[1]['revoked'] === '1', 'The tokens stay revoked and the count is reported');
+}
+$failAudit = false;
+$tokens[0]['revoked'] = '0';
+$audit = [];
+check(mcp_token_revoke_audited(1, [1, 999, 1000]) === 1 && array_column($audit, 'token_id') === [1] && $audit[0]['user_id'] === 1,
+	'An admin revoke audits only IDs that were active, attributed to the actor');
+
 // the shared audited create helper audits and never writes the value
 $audit  = [];
 $tokens = [];
@@ -238,6 +273,13 @@ $before    = count($tokens);
 throws(fn () => mcp_token_create_audited(2, 30, 2), RuntimeException::class);
 check(count($tokens) === $before + 1 && end($tokens)['revoked'] === '1', 'A token whose audit write fails is revoked and not returned');
 $failAudit = false;
+
+// a token whose ID cannot be found is revoked by value, not left active and never shown
+$hideTokenIds = true;
+$before       = count($tokens);
+throws(fn () => mcp_token_create_audited(2, 30, 2), RuntimeException::class);
+check(count($tokens) === $before + 1 && end($tokens)['revoked'] === '1', 'A token with no ID is still revoked');
+$hideTokenIds = false;
 throws(fn () => mcp_token_create_audited(3, 90, 3), InvalidArgumentException::class);
 throws(fn () => mcp_token_create_audited(2, 366, 2), InvalidArgumentException::class);
 

@@ -4,6 +4,9 @@
 
 require_once __DIR__ . '/../lib/providers.php';
 
+// mcp_time() reads stored times in the PHP default zone, so the expected strings assume UTC.
+date_default_timezone_set('UTC');
+
 $config = ['cacti_version' => '1.2.31'];
 $realms = [7 => [3, 15], 8 => []];
 $calls  = [];
@@ -64,7 +67,7 @@ function db_fetch_assoc_prepared($sql, $params = []) {
 
 		return $exposureRows;
 	}
-	check($sql === 'SELECT name, file, function FROM plugin_hooks WHERE hook = ? AND status = 1' && $params === ['abilities_register'], 'Hook query');
+	check($sql === 'SELECT name, file, function FROM plugin_hooks WHERE hook = ? AND status = 1 ORDER BY name, function' && $params === ['abilities_register'], 'Hook query');
 
 	return $hooks;
 }
@@ -85,6 +88,10 @@ function cacti_log($message, $output = false, $facility = '') {
 
 function fixture_register($registrar) {
 	$registrar->register('fixture-ok-one', fixture_definition('ok'));
+}
+
+function fixture_spoof($registrar) {
+	$registrar->register('cacti-spoofed-thing', fixture_definition('spoof'));
 }
 
 function fixture_fail($registrar) {
@@ -207,12 +214,12 @@ $registry = mcp_registry();
 check(count($registry->discover($principal)) === 3, 'A failing plugin leaves only the built-ins');
 check($registry->get($principal, 'fixture-half-done') === null, 'Partial registration discarded');
 check(count(array_filter($logs, fn ($log) => str_contains($log[0], 'registration failed'))) === 1, 'Failure logged once');
-check($logs[0] === ['MCP: ability registration failed for plugin fixture', false, 'MCP'], 'Failure log text');
+check($logs[0] === ['MCP: ability registration failed for plugin fixture (RuntimeException)', false, 'MCP'], 'Failure log text');
 
 // reserved_namespace: a plugin named cacti cannot register as a built-in
-$hooks = [['name' => 'cacti', 'file' => 'setup.php', 'function' => 'fixture_register']];
+$hooks = [['name' => 'cacti', 'file' => 'setup.php', 'function' => 'fixture_register'], ['name' => 'cacti', 'file' => 'setup.php', 'function' => 'fixture_spoof']];
 $logs  = [];
-check(count(mcp_registry()->all()) === 3 && !in_array('fixture-ok-one', array_column(mcp_registry()->all(), 'id'), true), 'Plugin named cacti is skipped');
+check(count(mcp_registry()->all()) === 3 && !array_intersect(['fixture-ok-one', 'cacti-spoofed-thing'], array_column(mcp_registry()->all(), 'id')), 'Plugin named cacti is skipped, even for a cacti-* id');
 check($logs[0] === ['MCP: ability registration skipped for plugin cacti: reserved namespace', false, 'MCP'], 'Reserved namespace logged');
 
 // a later healthy plugin still registers after a failing one
