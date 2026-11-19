@@ -24,6 +24,11 @@ function mcp_install_schema() : void {
 			outcome VARCHAR(16) NOT NULL,
 			started_at BIGINT UNSIGNED NOT NULL,
 			finished_at BIGINT UNSIGNED NULL
+		) ENGINE=InnoDB',
+		'CREATE TABLE IF NOT EXISTS plugin_mcp_ability (
+			id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+			exposed TINYINT UNSIGNED NOT NULL,
+			updated_at BIGINT UNSIGNED NOT NULL
 		) ENGINE=InnoDB'
 	];
 
@@ -83,6 +88,12 @@ function mcp_audit(array $principal, string $id, string $name, string $outcome) 
 		$ok = db_execute_prepared('INSERT INTO plugin_mcp_audit
 			(request_id, token_id, user_id, ability, outcome, started_at) VALUES (?, ?, ?, ?, ?, ?)',
 			[$id, $principal['token_id'], $principal['user_id'], $name, $outcome, time()]);
+	} elseif ($outcome === 'denied' || $outcome === 'rejected') {
+		// A refused attempt has no earlier 'started' row; it is one row, started and finished together.
+		$now = time();
+		$ok  = db_execute_prepared('INSERT INTO plugin_mcp_audit
+			(request_id, token_id, user_id, ability, outcome, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+			[$id, $principal['token_id'], $principal['user_id'], $name, $outcome, $now, $now]);
 	} else {
 		$ok = db_execute_prepared('UPDATE plugin_mcp_audit SET outcome = ?, finished_at = ? WHERE request_id = ?',
 			[$outcome, time(), $id]);
@@ -90,5 +101,51 @@ function mcp_audit(array $principal, string $id, string $name, string $outcome) 
 
 	if (!$ok) {
 		throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE');
+	}
+}
+
+/**
+ * Stored exposure flags by ability ID, read once per request.
+ *
+ * @return array<string, bool>
+ */
+function mcp_exposure_map(bool $refresh = false) : array {
+	static $map = null;
+
+	if ($map === null || $refresh) {
+		$map = [];
+
+		foreach (db_fetch_assoc_prepared('SELECT id, exposed FROM plugin_mcp_ability', []) ?: [] as $row) {
+			$map[(string) $row['id']] = (int) $row['exposed'] === 1;
+		}
+	}
+
+	return $map;
+}
+
+/** A stored flag wins; otherwise built-in (cacti) abilities are exposed and plugin abilities are hidden. */
+function mcp_is_exposed(string $id, string $namespace, array $map) : bool {
+	return $map[$id] ?? $namespace === 'cacti';
+}
+
+/** Expose or hide abilities. Every ID is validated before anything is written. */
+function mcp_set_exposure(array $ids, bool $exposed) : void {
+	foreach ($ids as $id) {
+		if (!is_string($id) || !AbilitiesRegistry::isValidId($id)) {
+			throw new InvalidArgumentException('Invalid ability ID');
+		}
+	}
+	$now = time();
+
+	try {
+		foreach (array_unique($ids) as $id) {
+			if (!db_execute_prepared('INSERT INTO plugin_mcp_ability (id, exposed, updated_at) VALUES (?, ?, ?)
+				ON DUPLICATE KEY UPDATE exposed = VALUES(exposed), updated_at = VALUES(updated_at)',
+				[$id, $exposed ? 1 : 0, $now])) {
+				throw new RuntimeException('MCP exposure update failed');
+			}
+		}
+	} finally {
+		mcp_exposure_map(true);
 	}
 }

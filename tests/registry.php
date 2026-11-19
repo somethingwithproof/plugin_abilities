@@ -66,7 +66,8 @@ $registry->register('cacti-fixture-read', definition([
 	}
 ]));
 $principal = ['token_id' => 1, 'token_kind' => 'pat', 'user_id' => 7, 'scopes' => ['abilities:read']];
-$audit     = function ($id, $name, $outcome) use (&$events) { $events[] = $outcome; };
+$trail     = [];
+$audit     = function ($id, $name, $outcome) use (&$events, &$trail) { $events[] = $outcome; $trail[] = [$id, $name, $outcome]; };
 $found     = $registry->discover($principal);
 check(count($found) === 1, 'Discovery');
 check(array_keys($found[0]) === ['id', 'label', 'description', 'category', 'inputSchema', 'outputSchema', 'annotations']
@@ -77,7 +78,7 @@ check($registry->discover(['scopes' => ['*']] + $principal) === [], 'No wildcard
 // scope_required
 check($registry->discover(['scopes' => []] + $principal) === [], 'scope_required');
 check($registry->get(['scopes' => []] + $principal, 'cacti-fixture-read') === null, 'scope_required get');
-rejects(fn () => $registry->execute(['scopes' => []] + $principal, 'cacti-fixture-read', (object) ['id' => 2], $audit), 'ABILITY_UNAVAILABLE');
+rejects(fn () => $registry->execute(['scopes' => []] + $principal, 'cacti-fixture-read', (object) ['id' => 2], $audit), 'ABILITY_NOT_FOUND');
 
 // get_hides_unpermitted
 check($registry->get($principal, 'cacti-fixture-read')['id'] === 'cacti-fixture-read', 'get permitted');
@@ -85,23 +86,56 @@ check($registry->get($principal, 'cacti-missing-thing') === null, 'get unknown')
 check($registry->get(['user_id' => 8] + $principal, 'cacti-fixture-read') === null, 'get_hides_unpermitted');
 
 $result = $registry->execute($principal, 'cacti-fixture-read', (object) ['id' => 2], $audit);
-check($result['result'] === ['id' => 2] && strlen($result['requestId']) === 32 && $calls === 1 && $events === ['started', 'succeeded'], 'Successful audit');
+check($result['result'] === ['id' => 2] && strlen($result['requestId']) === 32 && $calls === 1 && array_slice($events, -2) === ['started', 'succeeded'], 'Successful audit');
 $allowed = false;
-rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', (object) ['id' => 2], $audit), 'ABILITY_UNAVAILABLE');
+rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', (object) ['id' => 2], $audit), 'ABILITY_NOT_FOUND');
 $allowed = true;
+
+// unified_not_found: unknown, unpermitted, and hidden abilities are the same error
+foreach ([['cacti-missing-thing', $principal], ['cacti-fixture-read', ['user_id' => 8] + $principal]] as [$id, $who]) {
+	try {
+		$registry->execute($who, $id, (object) ['id' => 2], $audit);
+	} catch (AbilitiesError $error) {
+		check($error->status === 'NOT_FOUND' && $error->reason === 'ABILITY_NOT_FOUND' && $error->httpStatus() === 404 && $error->getMessage() === '', 'Unified not found');
+	}
+}
+
+// audit_sequences
+$trail = [];
+$ok    = $registry->execute($principal, 'cacti-fixture-read', (object) ['id' => 2], $audit);
+check(array_column($trail, 2) === ['started', 'succeeded'] && $trail[0][0] === $ok['requestId'] && $trail[1][0] === $ok['requestId']
+	&& $trail[0][1] === 'cacti-fixture-read', 'Audit sequence for success');
+$trail = [];
+rejects(fn () => $registry->execute($principal, 'cacti-missing-thing', (object) [], $audit), 'ABILITY_NOT_FOUND');
+check(count($trail) === 1 && $trail[0][2] === 'denied' && strlen($trail[0][0]) === 32, 'Audit sequence for denied');
+$trail = [];
+rejects(fn () => $registry->execute(['user_id' => 8] + $principal, 'cacti-fixture-read', (object) ['id' => 2], $audit), 'ABILITY_NOT_FOUND');
+check(array_column($trail, 2) === ['denied'] && $trail[0][1] === 'cacti-fixture-read', 'Audit denied for unpermitted');
+$trail = [];
+rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', (object) ['id' => 'secret-value'], $audit), 'INVALID_ARGUMENTS');
+check(array_column($trail, 2) === ['rejected'] && !str_contains(json_encode($trail), 'secret-value'), 'Audit sequence for rejected, no argument values');
+$trail = [];
+// An over-long or odd identifier is not written to the audit log verbatim.
+rejects(fn () => $registry->execute($principal, str_repeat('x', 300), (object) [], $audit), 'ABILITY_NOT_FOUND');
+check($trail[0][2] === 'denied' && strlen($trail[0][1]) <= 64, 'Denied audit name is bounded');
+// A failing audit write must not turn a denial into a different error.
+rejects(fn () => $registry->execute($principal, 'cacti-missing-thing', (object) [], function () { throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE'); }), 'ABILITY_NOT_FOUND');
 
 foreach ([(object) [], (object) ['id' => '2'], (object) ['id' => true], (object) ['id' => 0], (object) ['id' => 101], (object) ['id' => 2, 'extra' => 1]] as $args) {
 	rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', $args, $audit), 'INVALID_ARGUMENTS');
 }
-check($calls === 1, 'Invalid calls must not execute');
+check($calls === 2, 'Invalid calls must not execute');
 $badAudit = function () { throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE'); };
 rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', (object) ['id' => 2], $badAudit), 'AUDIT_UNAVAILABLE');
-check($calls === 1, 'Audit outage must prevent execution');
+check($calls === 2, 'Audit outage must prevent execution');
 $registry->register('cacti-fixture-fail', definition([
 	'execute' => function () { throw new AbilitiesError('NOT_FOUND', 'DEVICE_NOT_FOUND'); }
 ]));
 rejects(fn () => $registry->execute($principal, 'cacti-fixture-fail', (object) ['id' => 2], $audit), 'DEVICE_NOT_FOUND');
 check(array_slice($events, -2) === ['started', 'failed'], 'Failure audit');
+$trail = [];
+rejects(fn () => $registry->execute($principal, 'cacti-fixture-fail', (object) ['id' => 2], $audit), 'DEVICE_NOT_FOUND');
+check(array_column($trail, 2) === ['started', 'failed'] && $trail[0][0] === $trail[1][0], 'Audit sequence for failure');
 
 // output_schema_enforced
 $registry->register('cacti-fixture-leak', definition([
@@ -113,6 +147,18 @@ $registry->register('cacti-fixture-wrong', definition([
 	'execute' => fn () => ['id' => 'one']
 ]));
 rejects(fn () => $registry->execute($principal, 'cacti-fixture-wrong', (object) ['id' => 2], $audit), 'INVALID_RESULT');
+
+// result_list_rejected: a non-empty list is not an object result
+$registry->register('cacti-fixture-list', definition(['execute' => fn () => [1, 2]]));
+rejects(fn () => $registry->execute($principal, 'cacti-fixture-list', (object) ['id' => 2], $audit), 'INVALID_RESULT');
+check(array_slice($events, -2) === ['started', 'failed'], 'List result audit');
+$registry->register('cacti-fixture-empty', definition(['output_schema' => ['type' => 'object', 'properties' => new stdClass(), 'additionalProperties' => false], 'execute' => fn () => []]));
+check($registry->execute($principal, 'cacti-fixture-empty', (object) ['id' => 2], $audit)['result'] === [], 'Empty result is still an object');
+
+// output_schema_must_be_object
+foreach ([['type' => 'array', 'items' => ['type' => 'string'], 'maxItems' => 1], ['type' => 'string'], ['type' => ['object', 'null'], 'properties' => [], 'additionalProperties' => false]] as $badOutput) {
+	throws_logic(fn () => $registry->register('cacti-fixture-shape', definition(['output_schema' => $badOutput])), 'Non-object output schema accepted');
+}
 
 // rejects_write_annotations
 foreach ([['readOnly' => false] + READ_ONLY, ['destructive' => true] + READ_ONLY, ['idempotent' => false] + READ_ONLY,
@@ -151,6 +197,44 @@ throws_logic(fn () => $plugin->register('tholdextra-x', definition()), 'Namespac
 $plugin->registerCategory('thresholds', 'Thresholds');
 $plugin->register('thold-list-thresholds', definition(['category' => 'thresholds']));
 check($registry->get($principal, 'thold-list-thresholds') !== null, 'Registrar registration');
+
+// exposure
+$exposure = new AbilitiesRegistry();
+$exposure->registerCategory('fixtures', 'Fixtures');
+$exposure->register('cacti-fixture-open', definition());
+$exposure->register('cacti-fixture-hidden', definition());
+$exposure->register('cacti-fixture-denied', definition(['permission' => fn (int $user) => false]));
+$thold = new AbilitiesRegistrar($exposure, 'thold');
+$thold->registerCategory('thresholds', 'Thresholds');
+$thold->register('thold-list-thresholds', definition(['category' => 'thresholds']));
+$hidden = ['cacti-fixture-hidden', 'cacti-fixture-denied'];
+$exposure->setExposure(fn (string $id, string $namespace) => !in_array($id, $hidden, true));
+$ids = array_column($exposure->discover($principal), 'id');
+check($ids === ['cacti-fixture-open', 'thold-list-thresholds'], 'hidden_ability_absent discover');
+check($exposure->get($principal, 'cacti-fixture-hidden') === null, 'hidden_ability_absent get');
+$trail = [];
+$collect = function ($i, $n, $o) use (&$trail) { $trail[] = $o; };
+rejects(fn () => $exposure->execute($principal, 'cacti-fixture-hidden', (object) ['id' => 1], $collect), 'ABILITY_NOT_FOUND');
+check($trail === ['denied'], 'hidden ability execute is denied and audited');
+// exposure_never_grants
+$hidden = [];
+check($exposure->get($principal, 'cacti-fixture-denied') === null, 'exposure_never_grants');
+check(!in_array('cacti-fixture-denied', array_column($exposure->discover($principal), 'id'), true), 'exposure_never_grants discover');
+// all_ignores_exposure
+$hidden = ['cacti-fixture-hidden'];
+$all    = $exposure->all();
+check(array_column($all, 'id') === ['cacti-fixture-open', 'cacti-fixture-hidden', 'cacti-fixture-denied', 'thold-list-thresholds'], 'all_ignores_exposure');
+check(array_column($all, 'namespace') === ['cacti', 'cacti', 'cacti', 'thold'] && $all[0]['label'] === 'Fixture' && isset($all[0]['inputSchema']), 'all lists namespaces');
+// The callback receives the namespace, including after a scratch registry is adopted.
+$seen = [];
+$exposure->setExposure(function (string $id, string $namespace) use (&$seen) { $seen[$id] = $namespace; return true; });
+$scratch = clone $exposure;
+(new AbilitiesRegistrar($scratch, 'nginx'))->registerCategory('web', 'Web');
+(new AbilitiesRegistrar($scratch, 'nginx'))->register('nginx-list-sites', definition(['category' => 'web']));
+$exposure->adopt($scratch);
+$exposure->discover($principal);
+check($seen['nginx-list-sites'] === 'nginx' && $seen['thold-list-thresholds'] === 'thold' && $seen['cacti-fixture-open'] === 'cacti', 'Namespace survives adopt');
+check(AbilitiesRegistry::isValidId('cacti-list-devices') && !AbilitiesRegistry::isValidId("cacti-x\n") && !AbilitiesRegistry::isValidId(str_repeat('a', 65)), 'isValidId');
 
 // nullable_and_arrays
 $rich = new AbilitiesRegistry();

@@ -163,6 +163,19 @@ class AbilitiesRegistry {
 	private array $entries    = [];
 	private array $categories = [];
 
+	/** @var ?callable(string, string): bool */
+	private $isExposed = null;
+
+	/** Whether $id is a well-formed ability identifier. */
+	public static function isValidId(string $id) : bool {
+		return strlen($id) <= 64 && preg_match(self::ID_PATTERN, $id) === 1;
+	}
+
+	/** Set the exposure policy, callable(string $id, string $namespace): bool. Without one, every ability is exposed. */
+	public function setExposure(callable $isExposed) : void {
+		$this->isExposed = $isExposed;
+	}
+
 	public function registerCategory(string $id, string $label) : void {
 		if (!preg_match(self::CATEGORY_PATTERN, $id) || $label === '' || isset($this->categories[$id])) {
 			throw new LogicException('Invalid or duplicate ability category');
@@ -170,8 +183,8 @@ class AbilitiesRegistry {
 		$this->categories[$id] = $label;
 	}
 
-	public function register(string $id, array $definition) : void {
-		if (strlen($id) > 64 || !preg_match(self::ID_PATTERN, $id) || isset($this->entries[$id]) || count($this->entries) >= 256) {
+	public function register(string $id, array $definition, string $namespace = 'cacti') : void {
+		if (!self::isValidId($id) || isset($this->entries[$id]) || count($this->entries) >= 256) {
 			throw new LogicException('Invalid or duplicate ability');
 		}
 
@@ -203,13 +216,18 @@ class AbilitiesRegistry {
 			}
 			abilities_check_schema($definition[$key]);
 		}
-		$this->entries[$id] = ['id' => $id] + $definition;
+		$this->entries[$id] = ['id' => $id, 'namespace' => $namespace] + $definition;
 	}
 
 	/** Take over the state of a clone made from this registry, once its plugin registered cleanly. */
 	public function adopt(self $scratch) : void {
 		$this->entries    = $scratch->entries;
 		$this->categories = $scratch->categories;
+	}
+
+	/** Every registered ability with its namespace, ignoring principal and exposure. For the admin page only. */
+	public function all() : array {
+		return array_values(array_map(fn (array $entry) => $this->descriptor($entry) + ['namespace' => $entry['namespace']], $this->entries));
 	}
 
 	public function discover(array $principal) : array {
@@ -232,13 +250,25 @@ class AbilitiesRegistry {
 
 	/** @return array{requestId: string, result: array} */
 	public function execute(array $principal, string $id, stdClass $args, callable $audit) : array {
-		$entry = $this->entries[$id] ?? null;
-
-		if ($entry === null || !$this->allowed($entry, $principal)) {
-			throw new AbilitiesError('PERMISSION_DENIED', 'ABILITY_UNAVAILABLE');
-		}
-		abilities_validate($args, $entry['input_schema']);
+		$entry     = $this->entries[$id] ?? null;
 		$requestId = bin2hex(random_bytes(16));
+
+		// Unknown, hidden, and unpermitted abilities are indistinguishable to the caller.
+		if ($entry === null || !$this->allowed($entry, $principal)) {
+			// The audit name comes from the caller, so only a well-formed identifier is recorded.
+			$this->auditRefusal($audit, $requestId, self::isValidId($id) ? $id : '(invalid)', 'denied');
+
+			throw new AbilitiesError('NOT_FOUND', 'ABILITY_NOT_FOUND');
+		}
+
+		try {
+			abilities_validate($args, $entry['input_schema']);
+		} catch (AbilitiesError $error) {
+			// Argument values are never recorded.
+			$this->auditRefusal($audit, $requestId, $id, 'rejected');
+
+			throw $error;
+		}
 		$audit($requestId, $id, 'started');
 
 		try {
@@ -254,10 +284,20 @@ class AbilitiesRegistry {
 		return ['requestId' => $requestId, 'result' => $result];
 	}
 
+	/** Record a refused attempt. Nothing ran, so an audit outage must not change the error the caller sees. */
+	private function auditRefusal(callable $audit, string $requestId, string $name, string $outcome) : void {
+		try {
+			$audit($requestId, $name, $outcome);
+		} catch (Throwable $error) {
+			// The refusal itself is the outcome; the audit failure is not reported to the caller.
+		}
+	}
+
 	/** The result must survive a JSON round trip and match the declared output schema exactly. */
 	private function checkResult(mixed $result, array $schema) : void {
 		try {
-			if (!is_array($result)) {
+			// A non-empty list would be cast to an object with numeric keys; reject it instead.
+			if (!is_array($result) || ($result !== [] && array_is_list($result))) {
 				throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 			}
 			$json = json_encode((object) $result, JSON_THROW_ON_ERROR);
@@ -296,7 +336,9 @@ class AbilitiesRegistry {
 	}
 
 	private function allowed(array $entry, array $principal) : bool {
+		// Exposure narrows access; the realm check below still applies to exposed abilities.
 		return in_array('abilities:read', $principal['scopes'], true)
+			&& ($this->isExposed === null || ($this->isExposed)($entry['id'], $entry['namespace']) === true)
 			&& ($entry['permission'])($principal['user_id']) === true;
 	}
 }
@@ -310,7 +352,7 @@ class AbilitiesRegistrar {
 		if (!str_starts_with($id, $this->namespace . '-')) {
 			throw new LogicException('Ability IDs must start with the plugin namespace');
 		}
-		$this->registry->register($id, $definition);
+		$this->registry->register($id, $definition, $this->namespace);
 	}
 
 	public function registerCategory(string $id, string $label) : void {

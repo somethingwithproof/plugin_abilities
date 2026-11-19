@@ -86,7 +86,10 @@ $response = call('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"argum
 check($response['status'] === 200 && preg_match('/^[0-9a-f]{32}$/D', $response['body']['requestId']) === 1
 	&& $response['body']['result'] === ['id' => 5], 'Execute');
 check(call('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"arguments":{"id":500}}')['status'] === 400, 'Schema violation');
-check(call('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"arguments":{"id":5}}', false)['status'] === 403, 'Unpermitted execute');
+$response = call('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"arguments":{"id":5}}', false);
+check($response['status'] === 404 && reason($response) === 'ABILITY_NOT_FOUND', 'Unpermitted execute is not found');
+$missing = call('POST', '/v1/abilities/fixture-missing-thing:execute', [], '{"arguments":{}}');
+check($missing['status'] === 404 && $missing['body'] === $response['body'], 'Unknown and unpermitted execute are identical');
 
 // api_execute_rejects_extra_body_fields
 foreach (['{"arguments":{},"x":1}', '{}', '[]', '{"arguments":[]}', '{"arguments":"x"}', 'not json', '', '"x"'] as $bad) {

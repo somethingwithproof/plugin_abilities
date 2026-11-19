@@ -8,7 +8,6 @@
 const MCP_ERROR_MESSAGES = [
 	'INVALID_TOKEN'          => 'The token is missing, malformed, expired, or revoked.',
 	'REALM_REQUIRED'         => 'The token owner lacks the realm required for this plugin.',
-	'ABILITY_UNAVAILABLE'    => 'The ability does not exist or is not available to this user.',
 	'INVALID_ARGUMENTS'      => 'The arguments do not satisfy the ability schema.',
 	'INVALID_RESULT'         => 'The ability returned a result that does not satisfy its schema.',
 	'AUDIT_UNAVAILABLE'      => 'The audit log is unavailable, so the call was not executed.',

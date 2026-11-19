@@ -45,6 +45,7 @@ function plugin_mcp_check_config() {
 	return version_compare(PHP_VERSION, '8.2', '>=')
 		&& db_table_exists('plugin_mcp_token')
 		&& db_table_exists('plugin_mcp_audit')
+		&& db_table_exists('plugin_mcp_ability')
 		&& (int) db_fetch_cell_prepared(
 			'SELECT id FROM plugin_realms WHERE plugin = ? AND file = ?',
 			['mcp', 'api.php,mcp.php']

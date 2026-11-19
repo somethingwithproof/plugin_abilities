@@ -10,6 +10,8 @@ $calls  = [];
 $logs   = [];
 $hooks  = [];
 $rows   = [];
+$exposureRows  = [];
+$exposureReads = 0;
 
 for ($id = 1; $id <= 3; $id++) {
 	$rows[] = [
@@ -55,7 +57,13 @@ function get_allowed_devices($sql_where = '', $sql_order = 'description', $sql_l
 }
 
 function db_fetch_assoc_prepared($sql, $params = []) {
-	global $hooks;
+	global $hooks, $exposureRows, $exposureReads;
+
+	if ($sql === 'SELECT id, exposed FROM plugin_mcp_ability') {
+		$exposureReads++;
+
+		return $exposureRows;
+	}
 	check($sql === 'SELECT name, file, function FROM plugin_hooks WHERE hook = ? AND status = 1' && $params === ['abilities_register'], 'Hook query');
 
 	return $hooks;
@@ -204,6 +212,16 @@ check($logs[0] === ['MCP: ability registration failed for plugin fixture', false
 // a later healthy plugin still registers after a failing one
 $hooks    = [$hooks[0], ['name' => 'fixture', 'file' => 'setup.php', 'function' => 'fixture_register']];
 $registry = mcp_registry();
-check(count($registry->discover($principal)) === 4, 'Healthy plugin registered after a failing one');
+check(count($registry->discover($principal)) === 3, 'A plugin ability is hidden until an admin exposes it');
+check($registry->get($principal, 'fixture-ok-one') === null, 'Hidden plugin ability is absent');
+rejects(fn () => $registry->execute($principal, 'fixture-ok-one', new stdClass(), $audit), 'ABILITY_NOT_FOUND');
+$exposureRows = [['id' => 'fixture-ok-one', 'exposed' => '1'], ['id' => 'cacti-get-device', 'exposed' => '0']];
+mcp_exposure_map(true);
+$ids = array_column($registry->discover($principal), 'id');
+check(count($ids) === 3 && in_array('fixture-ok-one', $ids, true) && !in_array('cacti-get-device', $ids, true), 'Stored exposure overrides the defaults');
 check($registry->execute($principal, 'fixture-ok-one', new stdClass(), $audit)['result']['version'] === 'ok', 'Plugin ability executes');
+$reads = $exposureReads;
+$registry->discover($principal);
+$registry->get($principal, 'fixture-ok-one');
+check($exposureReads === $reads, 'Exposure map is read once per request, not per ability');
 print "Native provider permissions, paging, filtering, resource shape, and plugin isolation checks passed.\n";

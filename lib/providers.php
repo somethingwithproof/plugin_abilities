@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 require_once __DIR__ . '/registry.php';
+require_once __DIR__ . '/storage.php';
 require_once __DIR__ . '/aip.php';
 require_once __DIR__ . '/../setup.php';
 
@@ -27,6 +28,7 @@ const MCP_DEVICE_FIELDS = [
 
 function mcp_registry() : AbilitiesRegistry {
 	$registry = new AbilitiesRegistry();
+	$registry->setExposure(fn (string $id, string $namespace) => mcp_is_exposed($id, $namespace, mcp_exposure_map()));
 
 	$registry->registerCategory('inventory', 'Inventory');
 	$registry->registerCategory('system', 'System');

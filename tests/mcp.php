@@ -152,6 +152,9 @@ check(plain($r['body'])['result']['structuredContent']['error']['status'] === 'I
 	&& !str_contains(json_encode($r['body']), 'secret detail'), 'unexpected failure does not leak');
 $denied = rpc(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => ['name' => 'fixture-get-thing']], [], 'POST', false);
 check(plain($denied['body'])['result']['isError'] === true, 'unpermitted ability cannot be called');
+$deniedError = plain($denied['body'])['result']['structuredContent']['error'];
+$unknownError = plain(legacy('tools/call', ['name' => 'no-such-tool'])['body'])['result']['structuredContent']['error'];
+check($deniedError['status'] === 'NOT_FOUND' && $deniedError === $unknownError, 'unpermitted and unknown tools are indistinguishable');
 $r = legacy('tools/call', []);
 check($r['status'] === 200 && $r['body']['error']['code'] === -32602, 'legacy call without name');
 

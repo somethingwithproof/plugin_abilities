@@ -4,7 +4,26 @@
 
 require_once __DIR__ . '/../lib/storage.php';
 
-$row = null;
+$row           = null;
+$writes        = [];
+$exposureRows  = [];
+$reads         = 0;
+$failWrite     = false;
+
+function db_execute_prepared($sql, $params = [], $log = true, $db_conn = false) {
+	global $writes, $failWrite;
+	$writes[] = [$sql, $params];
+
+	return !$failWrite;
+}
+
+function db_fetch_assoc_prepared($sql, $params = []) {
+	global $exposureRows, $reads;
+	check($sql === 'SELECT id, exposed FROM plugin_mcp_ability' && $params === [], 'Exposure query');
+	$reads++;
+
+	return $exposureRows;
+}
 
 function check(bool $ok, string $message) : void {
 	if (!$ok) {
@@ -66,5 +85,79 @@ foreach (['["cacti.devices.get"]', '["abilities:read","cacti.devices.get"]', '[]
 
 $row = null;
 rejects(fn () => mcp_authenticate('Bearer ' . $token), 'INVALID_TOKEN');
+
+// mcp_is_exposed
+check(mcp_is_exposed('thold-list-thresholds', 'thold', []) === false, 'plugin_default_hidden');
+check(mcp_is_exposed('cacti-list-devices', 'cacti', []) === true, 'builtin_default_exposed');
+check(mcp_is_exposed('thold-list-thresholds', 'thold', ['thold-list-thresholds' => true]) === true, 'stored_value_wins (expose plugin)');
+check(mcp_is_exposed('cacti-list-devices', 'cacti', ['cacti-list-devices' => false]) === false, 'stored_value_wins (hide built-in)');
+
+// mcp_audit: one INSERT for started, one UPDATE for finishes, one complete INSERT for refusals
+$principal = ['token_id' => 4, 'user_id' => 7];
+mcp_audit($principal, str_repeat('a', 32), 'cacti-list-devices', 'started');
+mcp_audit($principal, str_repeat('a', 32), 'cacti-list-devices', 'succeeded');
+mcp_audit($principal, str_repeat('b', 32), 'cacti-list-devices', 'denied');
+mcp_audit($principal, str_repeat('c', 32), 'cacti-list-devices', 'rejected');
+check(count($writes) === 4 && str_starts_with($writes[0][0], 'INSERT') && str_starts_with($writes[1][0], 'UPDATE'), 'Audit started and finished statements');
+
+foreach ([2, 3] as $i) {
+	[$sql, $params] = $writes[$i];
+	check(str_starts_with($sql, 'INSERT INTO plugin_mcp_audit') && str_contains($sql, 'finished_at')
+		&& count($params) === 7 && $params[4] === ($i === 2 ? 'denied' : 'rejected') && $params[5] === $params[6], 'Refusal is one complete row');
+}
+$writes = [];
+
+// mcp_set_exposure
+mcp_set_exposure(['cacti-list-devices', 'thold-list-thresholds', 'thold-list-thresholds'], true);
+check(count($writes) === 2 && $writes[0][1][0] === 'cacti-list-devices' && $writes[0][1][1] === 1 && $writes[1][1][1] === 1
+	&& str_contains($writes[0][0], 'ON DUPLICATE KEY UPDATE') && !str_contains($writes[0][0], 'cacti-list-devices'), 'Exposure upsert uses bound parameters');
+mcp_set_exposure(['thold-list-thresholds'], false);
+check($writes[2][1][1] === 0, 'Hiding stores zero');
+$writes = [];
+
+foreach ([["x'; DROP TABLE t; --"], ['Cacti-list-devices'], ["cacti-list-devices\n"], ['cacti'], [str_repeat('a', 65)], [''], [5], ['cacti-list-devices', 'bad id']] as $bad) {
+	try {
+		mcp_set_exposure($bad, true);
+
+		throw new LogicException('Invalid ID accepted');
+	} catch (InvalidArgumentException $error) {
+		check($writes === [], 'Invalid IDs write nothing, not even the valid ones');
+	}
+}
+
+// the exposure map is read once and refreshed after a write
+$exposureRows = [['id' => 'thold-list-thresholds', 'exposed' => '1'], ['id' => 'cacti-get-device', 'exposed' => '0']];
+$reads        = 0;
+check(mcp_exposure_map(true) === ['thold-list-thresholds' => true, 'cacti-get-device' => false], 'Map from rows');
+mcp_exposure_map();
+mcp_exposure_map();
+check($reads === 1, 'Map is cached');
+mcp_set_exposure(['thold-list-thresholds'], false);
+mcp_exposure_map();
+check($reads === 2, 'A write resets the cache');
+$writes = [];
+$failWrite = true;
+
+try {
+	mcp_set_exposure(['thold-list-thresholds'], true);
+
+	throw new LogicException('A failed write must throw');
+} catch (RuntimeException $error) {
+	check($error->getMessage() === 'MCP exposure update failed', 'Write failure surfaces');
+}
+$failWrite = false;
+
+// install creates the exposure table
+$created = [];
+function db_execute($sql) {
+	global $created;
+	$created[] = $sql;
+
+	return true;
+}
+mcp_install_schema();
+check(count(array_filter($created, fn ($sql) => str_contains($sql, 'CREATE TABLE IF NOT EXISTS plugin_mcp_ability')
+	&& str_contains($sql, 'id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY') && str_contains($sql, 'exposed TINYINT UNSIGNED NOT NULL')
+	&& str_contains($sql, 'updated_at BIGINT UNSIGNED NOT NULL'))) === 1, 'Exposure table definition');
 
 echo "Token format and authentication checks passed.\n";
