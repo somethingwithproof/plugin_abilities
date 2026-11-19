@@ -186,6 +186,8 @@ Tokens are always created for a user, expire, and can be revoked:
   response page, so copy it into your secret manager immediately. You can create a
   token for yourself. Creating one for another user also needs the Users/Groups
   realm, because the token reads Cacti as that user.
+- **My MCP Tokens.** Any user with the MCP and Abilities API realm can manage their own
+  tokens; see below.
 - **Command line.** `tokens.php` runs only from the CLI, as an OS account that can
   administer Cacti. It takes the token from the environment so the value never
   appears on a command line or in the process list. Lifetime is 1 to 90 days and
@@ -198,6 +200,30 @@ Tokens are always created for a user, expire, and can be revoked:
   php plugins/mcp/tokens.php --list
   php plugins/mcp/tokens.php --revoke=ID
   ```
+
+Tokens cannot be created for the guest account or for disabled users, from the
+console, the command line, or My MCP Tokens. A token whose owner becomes the guest
+account stops working on its next request.
+
+### My MCP Tokens
+
+Management > My MCP Tokens (`plugins/mcp/mcp_tokens.php`) needs no administration
+realm: it is covered by the **MCP and Abilities API** realm, and the menu entry
+appears only for users who hold it. The page always acts on the signed-in user.
+Cacti's menu is part of the console, so a user without console access reaches the
+page by its address.
+
+- **Tokens** lists your tokens, creates one (1 to 365 days, default 90, shown once
+  in the response), and revokes your own. You cannot see or revoke anyone else's.
+- **Activity** lists the audit rows for your tokens, newest first.
+- **Available Tools** lists the abilities a token of yours can use right now, with
+  each ability's ID, name, and description. It follows your Cacti permissions and
+  the exposure settings an administrator chose.
+
+An installation made before this page existed has a realm file list without
+`mcp_tokens.php`. Install registers the list; it is not updated by enabling or
+disabling the plugin. Uninstall and install the plugin again, then grant the realms
+again, because Cacti removes realm grants when a plugin is uninstalled.
 
 The database stores only the SHA-256 hash of the token, so a lost token cannot be
 recovered; revoke it and create another. Rotation is the same: create a new token,

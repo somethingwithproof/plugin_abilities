@@ -23,8 +23,12 @@ function __($text, ...$args) {
 	return $text;
 }
 
+$guestId = 50;
+
 function read_config_option($name, $force = false) {
-	return 1;
+	global $guestId;
+
+	return $name === 'guest_user' ? $guestId : 1;
 }
 
 function is_realm_allowed($realm, $user = false) {
@@ -59,6 +63,10 @@ function db_execute_prepared($sql, $params = [], $log = true, $db_conn = false) 
 function db_fetch_row_prepared($sql, $params = [], $log = true, $db_conn = false) {
 	global $tokens;
 
+	if (str_contains($sql, 'FROM user_auth WHERE id = ?')) {
+		return $params[0] === 99 ? false : ['id' => (string) $params[0], 'enabled' => $params[0] === 60 ? '' : 'on'];
+	}
+
 	foreach ($tokens as $row) {
 		if ($row['token_hash'] === $params[0]) {
 			return $row;
@@ -88,6 +96,10 @@ function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true,
 	}
 
 	return 9;
+}
+
+function db_affected_rows($db_conn = false) {
+	return 2;
 }
 
 function db_fetch_assoc_prepared($sql, $params = []) {
@@ -156,6 +168,18 @@ check(mcp_token_id($token) === 1 && mcp_token_id('nope') === 0, 'Token ID lookup
 throws(fn () => mcp_token_create(8, 30, 0), InvalidArgumentException::class);
 array_pop($tokens);
 
+// the console create path goes through the same eligibility rules
+$stored = count($tokens);
+
+foreach ([50 => 'guest', 60 => 'disabled', 99 => 'unknown'] as $ineligible => $why) {
+	throws(fn () => mcp_token_create($ineligible, 30, 2), InvalidArgumentException::class);
+	check(count($tokens) === $stored, 'No token is stored for a ' . $why . ' target');
+}
+$guestId = 0;
+check(mcp_token_create(50, 30, 2) !== '', 'Without a configured guest account that user is an ordinary one');
+array_pop($tokens);
+$guestId = 50;
+
 // a created token authenticates with the exact scopes mcp_authenticate requires
 $principal = mcp_authenticate('Bearer ' . $token);
 check($principal === ['token_id' => 1, 'token_kind' => 'pat', 'user_id' => 7, 'scopes' => ['abilities:read']], 'A created token passes mcp_authenticate');
@@ -221,6 +245,10 @@ mcp_token_revoke([]);
 check($writes === [], 'Revoking nothing writes nothing');
 mcp_token_revoke([4, 12]);
 check($writes === [['UPDATE plugin_mcp_token SET revoked = 1 WHERE id IN (?, ?)', [4, 12]]], 'Revoke binds every ID');
+check(mcp_token_revoke([4, 12]) === 2, 'Revoke returns the rows changed');
+$writes = [];
+mcp_token_revoke([4], 7);
+check($writes === [['UPDATE plugin_mcp_token SET revoked = 1 WHERE id IN (?) AND user_id = ?', [4, 7]]], 'An owner-scoped revoke binds the owner');
 $writes = [];
 
 foreach ([[0], [-1], ['4'], ['4); DROP TABLE x'], [4, 'x']] as $bad) {

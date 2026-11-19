@@ -53,6 +53,7 @@ jobs:
               php tests/origin.php
               php tests/mcp.php
               php tests/admin.php
+              php tests/self_service.php
             '
 
   package:

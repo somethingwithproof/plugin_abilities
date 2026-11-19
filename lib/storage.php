@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 require_once __DIR__ . '/registry.php';
+require_once __DIR__ . '/admin.php';
+
+/** Files the MCP and Abilities API realm covers; one realm row holds the whole list. */
+const MCP_REALM_FILES = 'api.php,mcp.php,mcp_tokens.php';
 
 function mcp_install_schema() : void {
 	// Cacti's table registration also schedules tables for removal on uninstall.
@@ -49,7 +53,7 @@ function mcp_has_realm(int $userId) : bool {
 	}
 	// Refresh the mode used by Cacti's device helper, not a prior session copy.
 	read_config_option('graph_auth_method', true);
-	$id = db_fetch_cell_prepared('SELECT id FROM plugin_realms WHERE plugin = ? AND file = ?', ['mcp', 'api.php,mcp.php']);
+	$id = db_fetch_cell_prepared('SELECT id FROM plugin_realms WHERE plugin = ? AND file = ?', ['mcp', MCP_REALM_FILES]);
 
 	return $id !== false && (int) $id > 0 && is_realm_allowed((int) $id + 100, $userId);
 }
@@ -74,6 +78,14 @@ function mcp_authenticate(string $header) : array {
 	}
 	$userId = (int) $row['user_id'];
 
+	// A guest account never holds a personal token; one minted before the account became the guest stops working.
+	// Cacti caches the option, so this adds no query.
+	$guestId = (int) read_config_option('guest_user');
+
+	if ($guestId > 0 && $userId === $guestId) {
+		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
+	}
+
 	if (!mcp_has_realm($userId)) {
 		throw new AbilitiesError('PERMISSION_DENIED', 'REALM_REQUIRED');
 	}
@@ -85,7 +97,12 @@ function mcp_authenticate(string $header) : array {
 
 	mcp_touch_token((int) $row['id']);
 
-	return ['token_id' => (int) $row['id'], 'token_kind' => 'pat', 'user_id' => $userId, 'scopes' => ['abilities:read']];
+	return mcp_user_principal($userId, (int) $row['id']);
+}
+
+/** The principal a personal token of this user carries. The self-service page passes token 0 to preview it. */
+function mcp_user_principal(int $userId, int $tokenId) : array {
+	return ['token_id' => $tokenId, 'token_kind' => 'pat', 'user_id' => $userId, 'scopes' => ['abilities:read']];
 }
 
 /** Record use of a token at most once a minute. Bookkeeping only: a failure never fails authentication. */
@@ -215,6 +232,7 @@ function mcp_token_create(int $userId, int $days, ?int $createdBy = null) : stri
 	if ($userId < 1 || $createdBy < 1 || $days < 1 || $days > 365) {
 		throw new InvalidArgumentException('Invalid token owner or lifetime');
 	}
+	mcp_token_assert_eligible($userId);
 	$token = 'cmcp_pat_' . bin2hex(random_bytes(32));
 	$now   = time();
 
@@ -224,6 +242,19 @@ function mcp_token_create(int $userId, int $days, ?int $createdBy = null) : stri
 	}
 
 	return $token;
+}
+
+/**
+ * Refuse an owner who could not use a token: unknown, disabled, the guest account, or without the realm.
+ *
+ * @throws InvalidArgumentException when the user is not eligible
+ */
+function mcp_token_assert_eligible(int $userId) : void {
+	$user = db_fetch_row_prepared('SELECT id, enabled FROM user_auth WHERE id = ?', [$userId]);
+
+	if (!is_array($user) || !mcp_token_eligible($user, (int) read_config_option('guest_user'))) {
+		throw new InvalidArgumentException('User is not eligible for a token');
+	}
 }
 
 /** ID of the token with this value, for the audit row written when an admin creates it. */
@@ -252,21 +283,70 @@ function mcp_audit_admin(int $actor, int $tokenId, string $action) : void {
 	}
 }
 
+/**
+ * Revoke tokens. With $ownerId only that user's tokens change, so a forged ID cannot touch anyone else's.
+ *
+ * @param list<int> $ids
+ * @return int tokens changed; already revoked tokens do not count
+ * @throws InvalidArgumentException for a malformed ID
+ * @throws RuntimeException when the update fails
+ */
+function mcp_token_revoke(array $ids, ?int $ownerId = null) : int {
+	mcp_token_check_ids($ids);
+
+	if ($ids === []) {
+		return 0;
+	}
+	$params = array_values($ids);
+	$owner  = '';
+
+	if ($ownerId !== null) {
+		$owner    = ' AND user_id = ?';
+		$params[] = $ownerId;
+	}
+
+	if (!db_execute_prepared('UPDATE plugin_mcp_token SET revoked = 1 WHERE id IN (' . implode(', ', array_fill(0, count($ids), '?')) . ')' . $owner, $params)) {
+		throw new RuntimeException('MCP token revocation failed');
+	}
+
+	return (int) db_affected_rows();
+}
+
 /** @param list<int> $ids */
-function mcp_token_revoke(array $ids) : void {
+function mcp_token_check_ids(array $ids) : void {
 	foreach ($ids as $id) {
 		if (!is_int($id) || $id < 1) {
 			throw new InvalidArgumentException('Invalid token ID');
 		}
 	}
+}
+
+/**
+ * The given tokens that are active and, when $ownerId is set, owned by that user.
+ *
+ * @param list<int> $ids
+ * @return list<int>
+ */
+function mcp_token_revocable(array $ids, ?int $ownerId = null) : array {
+	mcp_token_check_ids($ids);
 
 	if ($ids === []) {
-		return;
+		return [];
+	}
+	$params = array_values($ids);
+	$owner  = '';
+
+	if ($ownerId !== null) {
+		$owner    = ' AND user_id = ?';
+		$params[] = $ownerId;
+	}
+	$found = db_fetch_assoc_prepared('SELECT id FROM plugin_mcp_token WHERE id IN (' . implode(', ', array_fill(0, count($ids), '?')) . ') AND revoked = 0' . $owner, $params);
+
+	if ($found === false) {
+		throw new RuntimeException('MCP token lookup failed');
 	}
 
-	if (!db_execute_prepared('UPDATE plugin_mcp_token SET revoked = 1 WHERE id IN (' . implode(', ', array_fill(0, count($ids), '?')) . ')', array_values($ids))) {
-		throw new RuntimeException('MCP token revocation failed');
-	}
+	return array_map('intval', array_column($found, 'id'));
 }
 
 /**

@@ -16,6 +16,8 @@ if (isset($options['help']) || !$options) {
 		. "CACTI_MCP_TOKEN. Generate one with:\n"
 		. "  printf 'cmcp_pat_%s\\n' \"$(openssl rand -hex 32)\"\n"
 		. "Tokens carry the abilities:read scope. Cacti realms decide what each user can see.\n"
+		. "Users can also manage their own tokens at Management > My MCP Tokens (mcp_tokens.php).\n"
+		. "Tokens are refused for disabled users and the guest account.\n"
 		. "Only its SHA-256 hash is stored. Token values are never printed.\n";
 	exit;
 }
@@ -55,8 +57,11 @@ try {
 		}
 		$user = (int) db_fetch_cell_prepared('SELECT id FROM user_auth WHERE username = ? AND enabled = ?', [$options['create'], 'on']);
 
-		if ($user <= 0 || !mcp_has_realm($user)) {
-			throw new RuntimeException('User must be enabled and granted the MCP and Abilities API realm');
+		try {
+			// The same rules as the console: enabled, not the guest account, and holding the realm.
+			mcp_token_assert_eligible($user);
+		} catch (InvalidArgumentException $error) {
+			throw new RuntimeException('User must be enabled, not the guest account, and granted the MCP and Abilities API realm');
 		}
 
 		if (db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash])) {

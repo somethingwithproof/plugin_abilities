@@ -66,7 +66,7 @@ function api_plugin_register_hook($plugin, $hook, $function, $file) {
 
 function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true, $db_conn = false) {
 	global $realm;
-	check($params === ['mcp', 'api.php,mcp.php'], 'Unexpected realm lookup');
+	check($params === ['mcp', 'api.php,mcp.php,mcp_tokens.php'], 'Unexpected realm lookup');
 
 	return $realm;
 }
@@ -74,7 +74,7 @@ function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true,
 check(!plugin_mcp_check_config(), 'A missing schema must block enable');
 plugin_mcp_install();
 check(plugin_mcp_check_config(), 'Fresh installation must be ready');
-check($realmWrites[0] === ['mcp', 'api.php,mcp.php', 'MCP and Abilities API', false], 'Realm must not be granted automatically');
+check($realmWrites[0] === ['mcp', 'api.php,mcp.php,mcp_tokens.php', 'MCP and Abilities API', false], 'Realm must not be granted automatically and must list the self-service page');
 check($realmWrites[1] === ['mcp', 'mcp_admin.php', 'MCP Administration', true], 'The admin realm is granted to the installing admin');
 check(in_array(['mcp', 'config_arrays', 'mcp_config_arrays', 'setup.php'], $hooks, true), 'Install must register the config_arrays hook');
 check(in_array(['mcp', 'draw_navigation_text', 'mcp_draw_navigation_text', 'setup.php'], $hooks, true), 'Install must register the draw_navigation_text hook');
@@ -87,10 +87,12 @@ check($settings['mcp']['mcp_public_url']['method'] === 'textbox' && $settings['m
 $menu = [];
 mcp_config_arrays();
 check($menu['Management']['plugins/mcp/mcp_admin.php'] === 'MCP', 'Management menu entry');
+check($menu['Management']['plugins/mcp/mcp_tokens.php'] === 'My MCP Tokens', 'Self-service menu entry');
 $nav = mcp_draw_navigation_text(['existing:' => ['title' => 'Existing']]);
 check($nav['existing:'] === ['title' => 'Existing'] && $nav['mcp_admin.php:']['title'] === 'MCP Administration'
 	&& $nav['mcp_admin.php:']['mapping'] === 'index.php:' && $nav['mcp_admin.php:']['url'] === 'mcp_admin.php'
-	&& $nav['mcp_admin.php:actions']['mapping'] === 'index.php:,mcp_admin.php:', 'Navigation entries');
+	&& $nav['mcp_admin.php:actions']['mapping'] === 'index.php:,mcp_admin.php:'
+	&& $nav['mcp_tokens.php:']['title'] === 'My MCP Tokens' && $nav['mcp_tokens.php:']['url'] === 'mcp_tokens.php', 'Navigation entries');
 $tables['plugin_mcp_audit']['retained'] = 'audit fixture';
 plugin_mcp_install();
 check($tables['plugin_mcp_audit']['retained'] === 'audit fixture', 'Repeated setup must retain audit data');

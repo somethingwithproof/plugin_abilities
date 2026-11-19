@@ -176,6 +176,14 @@ function mcp_admin_create_token() : ?string {
 		return null;
 	}
 
+	$guestId = (int) read_config_option('guest_user');
+
+	if ($guestId > 0 && $userId === $guestId) {
+		mcp_admin_error(mcp_token_ineligible_text());
+
+		return null;
+	}
+
 	if (!db_fetch_cell_prepared('SELECT id FROM user_auth WHERE id = ? AND enabled = ?', [$userId, 'on'])) {
 		mcp_admin_error(__('The user must exist and be enabled.', 'mcp'));
 
@@ -203,7 +211,12 @@ function mcp_admin_create_token() : ?string {
 		}
 
 		return $token;
-	} catch (InvalidArgumentException | RuntimeException $error) {
+	} catch (InvalidArgumentException $error) {
+		// The checks above passed, so a refusal here means the owner changed under us.
+		mcp_admin_error(mcp_token_ineligible_text());
+
+		return null;
+	} catch (RuntimeException $error) {
 		mcp_admin_error(__('The token could not be created.', 'mcp'));
 
 		return null;
@@ -328,11 +341,14 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 	print '</form>';
 
 	// Without the Users/Groups permission an admin can only create a token for themselves.
+	$guestId = (int) read_config_option('guest_user');
+
 	if (mcp_admin_has_user_admin()) {
-		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? ORDER BY username', ['on']);
+		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? AND id <> ? ORDER BY username', ['on', $guestId]);
 	} else {
-		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? AND id = ?', ['on', mcp_admin_actor()]);
+		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? AND id = ? AND id <> ?', ['on', mcp_admin_actor(), $guestId]);
 	}
+
 	$nonce = mcp_admin_with_session(fn (array &$session) => mcp_admin_nonce_issue($session));
 
 	html_start_box(__('Create Token', 'mcp'), '100%', '', '3', 'center', '');

@@ -61,7 +61,7 @@ plugin_mcp_install();
 $lookups = [];
 check(mcp_has_realm(7), 'Realm holder must be accepted');
 check($lookups === [$registered], 'Realm lookup must use the plugin and file list registered by setup');
-check($registered === ['mcp', 'api.php,mcp.php'], 'Realm must cover api.php and mcp.php');
+check($registered === ['mcp', 'api.php,mcp.php,mcp_tokens.php'], 'Realm must cover api.php, mcp.php, and mcp_tokens.php');
 check($allowed === [[109, 7]], 'Realm check must use the stored id plus 100 for the user');
 
 echo "Realm registration and lookup checks passed.\n";

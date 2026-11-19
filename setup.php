@@ -8,7 +8,10 @@ function plugin_mcp_install() {
 	}
 	require_once __DIR__ . '/lib/storage.php';
 	mcp_install_schema();
-	api_plugin_register_realm('mcp', 'api.php,mcp.php', __('MCP and Abilities API', 'mcp'), false);
+
+	// One realm row covers the endpoints and the self-service page. Cacti matches an existing row by
+	// file and updates its file list, so a reinstall keeps the users who already hold the realm.
+	api_plugin_register_realm('mcp', MCP_REALM_FILES, __('MCP and Abilities API', 'mcp'), false);
 
 	// The console page needs its own realm; the installing admin gets it.
 	api_plugin_register_realm('mcp', 'mcp_admin.php', __('MCP Administration', 'mcp'), true);
@@ -42,11 +45,17 @@ function mcp_config_arrays() {
 	global $menu;
 
 	$menu[__('Management')]['plugins/mcp/mcp_admin.php'] = __('MCP', 'mcp');
+
+	// Cacti's menu hides an item unless the user holds the realm of its file, and the realm
+	// row lists mcp_tokens.php, so only holders of the MCP and Abilities API realm see this.
+	$menu[__('Management')]['plugins/mcp/mcp_tokens.php'] = __('My MCP Tokens', 'mcp');
 }
 
 function mcp_draw_navigation_text($nav) {
 	$nav['mcp_admin.php:']        = ['title' => __('MCP Administration', 'mcp'), 'mapping' => 'index.php:', 'url' => 'mcp_admin.php', 'level' => '1'];
 	$nav['mcp_admin.php:actions'] = ['title' => __('Actions', 'mcp'), 'mapping' => 'index.php:,mcp_admin.php:', 'url' => '', 'level' => '2'];
+
+	$nav['mcp_tokens.php:'] = ['title' => __('My MCP Tokens', 'mcp'), 'mapping' => 'index.php:', 'url' => 'mcp_tokens.php', 'level' => '1'];
 
 	return $nav;
 }
@@ -60,13 +69,15 @@ function plugin_mcp_uninstall() {
 }
 
 function plugin_mcp_check_config() {
+	require_once __DIR__ . '/lib/storage.php';
+
 	return version_compare(PHP_VERSION, '8.2', '>=')
 		&& db_table_exists('plugin_mcp_token')
 		&& db_table_exists('plugin_mcp_audit')
 		&& db_table_exists('plugin_mcp_ability')
 		&& (int) db_fetch_cell_prepared(
 			'SELECT id FROM plugin_realms WHERE plugin = ? AND file = ?',
-			['mcp', 'api.php,mcp.php']
+			['mcp', MCP_REALM_FILES]
 		) > 0;
 }
 
