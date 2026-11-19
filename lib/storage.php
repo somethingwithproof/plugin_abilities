@@ -251,7 +251,9 @@ function mcp_token_create(int $userId, int $days, ?int $createdBy = null) : stri
 function mcp_token_assert_eligible(int $userId) : void {
 	$user = db_fetch_row_prepared('SELECT id, enabled FROM user_auth WHERE id = ?', [$userId]);
 
-	if (!is_array($user) || !mcp_token_eligible($user, (int) read_config_option('guest_user'))) {
+	// Forced read: a console session caches options, so an account made the guest after sign-in
+	// would otherwise still pass. The endpoints have no session and keep the cached read.
+	if (!is_array($user) || !mcp_token_eligible($user, (int) read_config_option('guest_user', true))) {
 		throw new InvalidArgumentException('User is not eligible for a token');
 	}
 }

@@ -39,7 +39,7 @@ function __($text, ...$args) {
 
 function read_config_option($name, $force = false) {
 	global $config, $optionReads;
-	$optionReads[] = $name;
+	$optionReads[] = [$name, (bool) $force];
 
 	return $config[$name] ?? 0;
 }
@@ -179,7 +179,13 @@ check(mcp_authenticate('Bearer cmcp_pat_' . str_repeat('a', 64))['user_id'] === 
 $config['guest_user'] = 3;
 $optionReads = [];
 mcp_authenticate('Bearer ' . $token);
-check(array_count_values($optionReads)['guest_user'] === 1, 'The guest account is read once, through the cached option');
+check(array_count_values(array_column($optionReads, 0))['guest_user'] === 1, 'The guest account is read once');
+check(in_array(['guest_user', false], $optionReads, true) && !in_array(['guest_user', true], $optionReads, true), 'Authentication reads the guest account through the cached option');
+
+// token eligibility forces a fresh read so a stale console session cannot mint a guest token
+$optionReads = [];
+mcp_token_assert_eligible(2);
+check(in_array(['guest_user', true], $optionReads, true) && !in_array(['guest_user', false], $optionReads, true), 'Eligibility forces a fresh guest_user read');
 
 // revoke_scoped_to_owner
 $tokens = [];
