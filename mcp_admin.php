@@ -122,23 +122,6 @@ function mcp_admin_confirm(array $parsed, string $tab) : void {
 	bottom_footer();
 }
 
-/** Run $fn against the session array, opening and closing the session when Cacti has it closed. */
-function mcp_admin_with_session(callable $fn) : mixed {
-	$opened = session_status() === PHP_SESSION_NONE;
-
-	if ($opened) {
-		cacti_session_start();
-	}
-
-	try {
-		return $fn($_SESSION);
-	} finally {
-		if ($opened) {
-			cacti_session_close();
-		}
-	}
-}
-
 function mcp_admin_actor() : int {
 	return (int) ($_SESSION['sess_user_id'] ?? 0);
 }
@@ -170,47 +153,22 @@ function mcp_admin_create_token() : ?string {
 	// One submission per issued form, so reloading the response cannot mint a second token.
 	$given = get_nfilter_request_var('mcp_nonce');
 
-	if (!is_string($given) || !mcp_admin_with_session(fn (array &$session) => mcp_admin_nonce_consume($session, $given))) {
+	if (!is_string($given) || !mcp_with_session(fn (array &$session) => mcp_admin_nonce_consume($session, $given))) {
 		mcp_admin_error(__('This form was already submitted.', 'mcp'));
 
 		return null;
 	}
 
-	$guestId = (int) read_config_option('guest_user');
-
-	if ($guestId > 0 && $userId === $guestId) {
+	try {
+		mcp_token_assert_eligible($userId);
+	} catch (InvalidArgumentException $error) {
 		mcp_admin_error(mcp_token_ineligible_text());
 
 		return null;
 	}
 
-	if (!db_fetch_cell_prepared('SELECT id FROM user_auth WHERE id = ? AND enabled = ?', [$userId, 'on'])) {
-		mcp_admin_error(__('The user must exist and be enabled.', 'mcp'));
-
-		return null;
-	}
-
-	// A token for a user without the API realm would only ever fail authentication.
-	if (!mcp_has_realm($userId)) {
-		mcp_admin_error(__('The user must be granted the MCP and Abilities API realm first.', 'mcp'));
-
-		return null;
-	}
-
 	try {
-		$token = mcp_token_create($userId, $days, $actor);
-		$id    = mcp_token_id($token);
-
-		try {
-			mcp_audit_admin($actor, $id, 'token-create');
-		} catch (RuntimeException $error) {
-			// An unaudited token is not handed out.
-			mcp_token_revoke([$id]);
-
-			throw $error;
-		}
-
-		return $token;
+		return mcp_token_create_audited($userId, $days, $actor);
 	} catch (InvalidArgumentException $error) {
 		// The checks above passed, so a refusal here means the owner changed under us.
 		mcp_admin_error(mcp_token_ineligible_text());
@@ -349,7 +307,7 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? AND id = ? AND id <> ?', ['on', mcp_admin_actor(), $guestId]);
 	}
 
-	$nonce = mcp_admin_with_session(fn (array &$session) => mcp_admin_nonce_issue($session));
+	$nonce = mcp_with_session(fn (array &$session) => mcp_admin_nonce_issue($session));
 
 	html_start_box(__('Create Token', 'mcp'), '100%', '', '3', 'center', '');
 	print "<tr class='odd'><td><form id='mcp_create_token' action='" . html_escape(mcp_admin_url()) . "' method='post'><table class='filterTable'><tr><td>"

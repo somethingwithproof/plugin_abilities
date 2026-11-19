@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 require_once __DIR__ . '/registry.php';
-require_once __DIR__ . '/admin.php';
 
 /** Files the MCP and Abilities API realm covers; one realm row holds the whole list. */
 const MCP_REALM_FILES = 'api.php,mcp.php,mcp_tokens.php';
@@ -255,6 +254,43 @@ function mcp_token_assert_eligible(int $userId) : void {
 	if (!is_array($user) || !mcp_token_eligible($user, (int) read_config_option('guest_user'))) {
 		throw new InvalidArgumentException('User is not eligible for a token');
 	}
+}
+
+/**
+ * Whether a user may hold a personal token: enabled, not the guest account, and holding the
+ * MCP and Abilities API realm. A guest token would let anyone who knows the shared account read Cacti.
+ *
+ * @param array{id?: mixed, enabled?: mixed} $user a user_auth row
+ */
+function mcp_token_eligible(array $user, int $guestUserId) : bool {
+	$id = (int) ($user['id'] ?? 0);
+
+	return $id > 0
+		&& ($user['enabled'] ?? '') === 'on'
+		&& !($guestUserId > 0 && $id === $guestUserId)
+		&& mcp_has_realm($id);
+}
+
+/**
+ * Create a token and audit its creation by $actor as one unit: a token whose audit row cannot be
+ * written is revoked and not handed out. The value is returned once.
+ *
+ * @throws InvalidArgumentException for an ineligible owner or a bad lifetime
+ * @throws RuntimeException when the token or its audit row cannot be stored
+ */
+function mcp_token_create_audited(int $userId, int $days, int $actor) : string {
+	$token = mcp_token_create($userId, $days, $actor);
+	$id    = mcp_token_id($token);
+
+	try {
+		mcp_audit_admin($actor, $id, 'token-create');
+	} catch (RuntimeException $error) {
+		mcp_token_revoke([$id]);
+
+		throw $error;
+	}
+
+	return $token;
 }
 
 /** ID of the token with this value, for the audit row written when an admin creates it. */

@@ -99,46 +99,26 @@ function mcp_admin_nonce_consume(array &$session, string $given) : bool {
 	return is_string($issued) && $given !== '' && hash_equals($issued, $given);
 }
 
-/**
- * Whether a user may hold a personal token: enabled, not the guest account, and holding the
- * MCP and Abilities API realm. A guest token would let anyone who knows the shared account read Cacti.
- *
- * @param array{id?: mixed, enabled?: mixed} $user a user_auth row
- */
-function mcp_token_eligible(array $user, int $guestUserId) : bool {
-	$id = (int) ($user['id'] ?? 0);
-
-	return $id > 0
-		&& ($user['enabled'] ?? '') === 'on'
-		&& !($guestUserId > 0 && $id === $guestUserId)
-		&& mcp_has_realm($id);
-}
-
 /** Shown by the console and the self-service page when a token is refused for its owner. */
 function mcp_token_ineligible_text() : string {
 	return __('Tokens cannot be created for the guest account or disabled users.', 'mcp');
 }
 
-/**
- * Create a token for the signed-in user from the self-service page, audited as that user.
- * The value is returned once. An unaudited token is revoked and not handed out.
- *
- * @throws InvalidArgumentException for an ineligible user or a bad lifetime
- * @throws RuntimeException when the token or its audit row cannot be stored
- */
-function mcp_self_create(int $userId, int $days) : string {
-	$token = mcp_token_create($userId, $days, $userId);
-	$id    = mcp_token_id($token);
+/** Run $fn against the session array, opening and closing the session when Cacti has it closed. */
+function mcp_with_session(callable $fn) : mixed {
+	$opened = session_status() === PHP_SESSION_NONE;
 
-	try {
-		mcp_audit_admin($userId, $id, 'token-create');
-	} catch (RuntimeException $error) {
-		mcp_token_revoke([$id], $userId);
-
-		throw $error;
+	if ($opened) {
+		cacti_session_start();
 	}
 
-	return $token;
+	try {
+		return $fn($_SESSION);
+	} finally {
+		if ($opened) {
+			cacti_session_close();
+		}
+	}
 }
 
 /**

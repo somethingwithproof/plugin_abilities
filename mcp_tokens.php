@@ -52,23 +52,6 @@ function mcp_self_tabs(string $current) : void {
 	print '</ul></nav></div>';
 }
 
-/** Run $fn against the session array, opening and closing the session when Cacti has it closed. */
-function mcp_self_with_session(callable $fn) : mixed {
-	$opened = session_status() === PHP_SESSION_NONE;
-
-	if ($opened) {
-		cacti_session_start();
-	}
-
-	try {
-		return $fn($_SESSION);
-	} finally {
-		if ($opened) {
-			cacti_session_close();
-		}
-	}
-}
-
 /** Rows per page from Cacti's setting or the filter, kept within what the storage helpers accept. */
 function mcp_self_rows() : int {
 	$rows = get_request_var('rows') == '-1' ? (int) read_config_option('num_rows_table') : (int) get_request_var('rows');
@@ -85,9 +68,13 @@ function mcp_self_paging_filters() : array {
 
 /** Whether the signed-in user may hold a token, from the same rules the storage layer enforces. */
 function mcp_self_eligible() : bool {
-	$user = db_fetch_row_prepared('SELECT id, enabled FROM user_auth WHERE id = ?', [mcp_self_user()]);
+	try {
+		mcp_token_assert_eligible(mcp_self_user());
+	} catch (InvalidArgumentException $error) {
+		return false;
+	}
 
-	return is_array($user) && mcp_token_eligible($user, (int) read_config_option('guest_user'));
+	return true;
 }
 
 /** Create a token for the signed-in user. Returns it once, or null with a message raised. */
@@ -103,14 +90,14 @@ function mcp_self_create_token() : ?string {
 	// One submission per issued form, so reloading the response cannot mint a second token.
 	$given = get_nfilter_request_var('mcp_nonce');
 
-	if (!is_string($given) || !mcp_self_with_session(fn (array &$session) => mcp_admin_nonce_consume($session, $given))) {
+	if (!is_string($given) || !mcp_with_session(fn (array &$session) => mcp_admin_nonce_consume($session, $given))) {
 		mcp_self_error(__('This form was already submitted.', 'mcp'));
 
 		return null;
 	}
 
 	try {
-		return mcp_self_create(mcp_self_user(), $days);
+		return mcp_token_create_audited(mcp_self_user(), $days, mcp_self_user());
 	} catch (InvalidArgumentException $error) {
 		mcp_self_error(mcp_token_ineligible_text());
 	} catch (RuntimeException $error) {
@@ -188,7 +175,7 @@ function mcp_self_tokens_tab(?string $newToken) : void {
 
 		return;
 	}
-	$nonce = mcp_self_with_session(fn (array &$session) => mcp_admin_nonce_issue($session));
+	$nonce = mcp_with_session(fn (array &$session) => mcp_admin_nonce_issue($session));
 
 	html_start_box(__('Create Token', 'mcp'), '100%', '', '3', 'center', '');
 	print "<tr class='odd'><td><form id='mcp_create_token' action='" . html_escape(mcp_self_url()) . "' method='post'><table class='filterTable'><tr><td>"

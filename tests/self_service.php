@@ -13,6 +13,7 @@ $tokens       = [];
 $audit        = [];
 $affected     = 0;
 $optionReads  = [];
+$failAudit    = false;
 
 function check(bool $ok, string $message) : void {
 	if (!$ok) {
@@ -111,6 +112,9 @@ function db_execute_prepared($sql, $params = [], $log = true, $db_conn = false) 
 	}
 
 	if (str_starts_with($sql, 'INSERT INTO plugin_mcp_audit')) {
+		if ($GLOBALS['failAudit']) {
+			return false;
+		}
 		$audit[] = ['token_id' => $params[1], 'user_id' => $params[2], 'ability' => $params[3], 'outcome' => $params[4]];
 
 		return true;
@@ -191,14 +195,21 @@ check($audit === [['token_id' => 1, 'user_id' => 2, 'ability' => 'mcp-token-revo
 check(mcp_self_revoke(2, [1]) === 0 && count($audit) === 1, 'Revoking again changes and audits nothing');
 check(mcp_token_revoke([2]) === 1 && $tokens[1]['revoked'] === '1', 'The admin path (no owner) revokes any token and returns the count');
 
-// self_create audits and never writes the value
+// the shared audited create helper audits and never writes the value
 $audit  = [];
 $tokens = [];
-$value  = mcp_self_create(2, 90);
+$value  = mcp_token_create_audited(2, 90, 2);
 check(mcp_token_hash($value) !== null && count($tokens) === 1 && $tokens[0]['created_by'] === 2, 'Self-service create makes the owner the creator');
 check($audit === [['token_id' => 1, 'user_id' => 2, 'ability' => 'mcp-token-create', 'outcome' => 'succeeded']], 'Creation is audited');
-throws(fn () => mcp_self_create(3, 90), InvalidArgumentException::class);
-throws(fn () => mcp_self_create(2, 366), InvalidArgumentException::class);
+$admin = mcp_token_create_audited(6, 30, 2);
+check($tokens[1]['user_id'] === '6' && $tokens[1]['created_by'] === 2 && end($audit)['user_id'] === 2, 'An admin create is attributed to the actor');
+$failAudit = true;
+$before    = count($tokens);
+throws(fn () => mcp_token_create_audited(2, 30, 2), RuntimeException::class);
+check(count($tokens) === $before + 1 && end($tokens)['revoked'] === '1', 'A token whose audit write fails is revoked and not returned');
+$failAudit = false;
+throws(fn () => mcp_token_create_audited(3, 90, 3), InvalidArgumentException::class);
+throws(fn () => mcp_token_create_audited(2, 366, 2), InvalidArgumentException::class);
 
 // available_tools_follow_principal
 $registry = new AbilitiesRegistry();

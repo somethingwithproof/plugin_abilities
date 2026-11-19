@@ -215,7 +215,8 @@ page by its address.
 
 - **Tokens** lists your tokens, creates one (1 to 365 days, default 90, shown once
   in the response), and revokes your own. You cannot see or revoke anyone else's.
-- **Activity** lists the audit rows for your tokens, newest first.
+- **Activity** lists the actions you performed, newest first: calls made with your
+  tokens and token changes you made.
 - **Available Tools** lists the abilities a token of yours can use right now, with
   each ability's ID, name, and description. It follows your Cacti permissions and
   the exposure settings an administrator chose.
