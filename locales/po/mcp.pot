@@ -6,6 +6,13 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 
 #: mcp_admin.php
+#, php-format
+msgid "%d token was revoked."
+msgid_plural "%d tokens were revoked."
+msgstr[0] ""
+msgstr[1] ""
+
+#: mcp_admin.php
 msgid "(deleted user)"
 msgstr ""
 
@@ -266,6 +273,10 @@ msgstr ""
 msgid "None of the selected abilities is registered."
 msgstr ""
 
+#: mcp_admin.php
+msgid "None of the selected tokens are active."
+msgstr ""
+
 #: mcp_admin.php mcp_tokens.php
 msgid "Outcome"
 msgstr ""
@@ -348,10 +359,6 @@ msgid "The exposure settings were saved."
 msgstr ""
 
 #: mcp_admin.php
-msgid "The selected tokens were revoked."
-msgstr ""
-
-#: mcp_admin.php
 msgid "The selection contains an invalid ability. Nothing was changed."
 msgstr ""
 
@@ -375,7 +382,7 @@ msgstr ""
 msgid "The tokens could not be revoked."
 msgstr ""
 
-#: mcp_admin.php
+#: mcp_admin.php mcp_tokens.php
 msgid "The tokens were revoked, but the audit entry could not be written."
 msgstr ""
 

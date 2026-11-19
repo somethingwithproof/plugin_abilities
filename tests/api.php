@@ -139,6 +139,23 @@ $logs = [];
 call('GET', '/v1/abilities/no-such-thing');
 check($logs === [], 'Expected errors are not logged');
 
+// an invalid UTF-8 path is a 404, not a 500 from a failed JSON encode
+$response = call('GET', "/v1/\xff\xfe/" . str_repeat("\xc3", 300));
+check($response['status'] === 404 && reason($response) === 'UNKNOWN_PATH' && json_encode($response['body']) !== false, 'Invalid UTF-8 path');
+
+// execute is audited: started and succeeded, then denied and rejected for refusals
+$events    = [];
+$recording = function ($id, $name, $outcome) use (&$events) { $events[] = [$name, $outcome]; };
+$principal = ['token_id' => 1, 'token_kind' => 'pat', 'user_id' => 7, 'scopes' => ['abilities:read']];
+mcp_api_handle('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"arguments":{"id":5}}', fixture_registry(), $principal, $recording);
+check($events === [['fixture-get-thing', 'started'], ['fixture-get-thing', 'succeeded']], 'Audit events for a successful execute');
+$events = [];
+mcp_api_handle('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"arguments":{"id":500}}', fixture_registry(), $principal, $recording);
+check($events === [['fixture-get-thing', 'rejected']], 'Audit event for rejected arguments');
+$events = [];
+mcp_api_handle('POST', '/v1/abilities/fixture-get-thing:execute', [], '{"arguments":{"id":5}}', fixture_registry(false), $principal, $recording);
+check($events === [['fixture-get-thing', 'denied']], 'Audit event for a denied execute');
+
 // unauthenticated_adds_challenge
 $response = mcp_api_error(new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN'));
 check($response['status'] === 401 && $response['headers']['WWW-Authenticate'] === 'Bearer', 'WWW-Authenticate');

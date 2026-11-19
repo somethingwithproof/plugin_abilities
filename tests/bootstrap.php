@@ -112,79 +112,84 @@ function run_fixture(array $server, array $cookie, array $get = [], array $metho
 	mkdir($root . '/plugins/mcp/lib', 0700, true);
 	mkdir($root . '/sessions', 0700);
 
-	foreach (glob(__DIR__ . '/../lib/*.php') as $file) {
-		copy($file, $root . '/plugins/mcp/lib/' . basename($file));
-	}
-	file_put_contents($root . '/include/global.php', <<<'PHP'
-		<?php
-		$config = ['poller_id' => 1];
-		function fixture_config_poller() { global $config; return $config['poller_id'] ?? null; }
-		function api_plugin_is_enabled($plugin) { global $config; return $plugin === 'mcp' && isset($config['poller_id']); }
-		$fixture_during = [
-			'poller'  => fixture_config_poller(),
-			'method'  => $_SERVER['REQUEST_METHOD'],
-			'cookie'  => $_COOKIE,
-			'post'    => $_POST,
-			'request' => $_REQUEST,
-			'get'     => $_GET,
-		];
-		session_start();
-		$_SESSION['sess_user_id'] = 5;
-		print '<html>Cacti page output</html>';
-		PHP);
-
-	if ($pollerId !== 1) {
-		file_put_contents($root . '/include/global.php', str_replace("['poller_id' => 1]", "['poller_id' => " . $pollerId . ']',
-			(string) file_get_contents($root . '/include/global.php')));
-	}
-
-	if ($cactiExits) {
-		/* Like global.php when the database is down: a nested buffer, an HTML
-		 * page, then exit. The flushes push the page through the bootstrap
-		 * buffer before shutdown, so its callback must discard it. */
+	// Remove the fixture tree even when an assertion or the child process fails.
+	try {
+		foreach (glob(__DIR__ . '/../lib/*.php') as $file) {
+			copy($file, $root . '/plugins/mcp/lib/' . basename($file));
+		}
 		file_put_contents($root . '/include/global.php', <<<'PHP'
 			<?php
-			ob_start(fn ($buffer) => $buffer);
-			print '<p>FATAL: Connection to Cacti database failed.</p>';
-			ob_end_flush();
-			ob_flush();
-			exit;
+			$config = ['poller_id' => 1];
+			function fixture_config_poller() { global $config; return $config['poller_id'] ?? null; }
+			function api_plugin_is_enabled($plugin) { global $config; return $plugin === 'mcp' && isset($config['poller_id']); }
+			$fixture_during = [
+				'poller'  => fixture_config_poller(),
+				'method'  => $_SERVER['REQUEST_METHOD'],
+				'cookie'  => $_COOKIE,
+				'post'    => $_POST,
+				'request' => $_REQUEST,
+				'get'     => $_GET,
+			];
+			session_start();
+			$_SESSION['sess_user_id'] = 5;
+			print '<html>Cacti page output</html>';
 			PHP);
+
+		if ($pollerId !== 1) {
+			file_put_contents($root . '/include/global.php', str_replace("['poller_id' => 1]", "['poller_id' => " . $pollerId . ']',
+				(string) file_get_contents($root . '/include/global.php')));
+		}
+
+		if ($cactiExits) {
+			/* Like global.php when the database is down: a nested buffer, an HTML
+			 * page, then exit. The flushes push the page through the bootstrap
+			 * buffer before shutdown, so its callback must discard it. */
+			file_put_contents($root . '/include/global.php', <<<'PHP'
+				<?php
+				ob_start(fn ($buffer) => $buffer);
+				print '<p>FATAL: Connection to Cacti database failed.</p>';
+				ob_end_flush();
+				ob_flush();
+				exit;
+				PHP);
+		}
+		file_put_contents($root . '/plugins/mcp/endpoint.php', <<<'PHP'
+			<?php
+			ini_set('session.save_path', __DIR__ . '/../../sessions');
+			$_SERVER = json_decode($argv[1], true) + $_SERVER;
+			$_COOKIE = json_decode($argv[2], true);
+			$_GET = json_decode($argv[3], true);
+			$_POST = ['__csrf_magic' => 'x'];
+			$_REQUEST = $_GET + $_POST + $_COOKIE;
+			// Runs after every shutdown function registered later, so it sees the final status.
+			register_shutdown_function(fn () => register_shutdown_function(
+				fn () => file_put_contents(__DIR__ . '/../../status', (string) http_response_code())));
+			$mcp_bootstrap_options = ['methods' => json_decode($argv[4], true), 'content_type' => 'application/json',
+				'max_bytes' => 65536, 'bearer' => true, 'error_format' => $argv[5]];
+			$mcp_request = require __DIR__ . '/lib/bootstrap_cacti.php';
+			print json_encode(['request' => $mcp_request, 'during' => $fixture_during ?? null,
+				'method' => $_SERVER['REQUEST_METHOD'], 'session' => session_status(),
+				'poller' => fixture_config_poller(), 'sessionData' => $_SESSION ?? [], 'get' => $_GET]);
+			PHP);
+		$command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/plugins/mcp/endpoint.php') . ' '
+			. escapeshellarg(json_encode($server)) . ' ' . escapeshellarg(json_encode($cookie))
+			. ' ' . escapeshellarg(json_encode($get, JSON_FORCE_OBJECT)) . ' ' . escapeshellarg(json_encode($methods))
+			. ' ' . escapeshellarg($errorFormat);
+		$output  = (string) shell_exec($command);
+		$status  = (int) @file_get_contents($root . '/status');
+
+
+		return (json_decode($output, true) ?? []) + ['_raw' => $output, '_status' => $status];
+	} finally {
+		$items = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+			RecursiveIteratorIterator::CHILD_FIRST);
+
+		foreach ($items as $item) {
+			$item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+		}
+		rmdir($root);
+
 	}
-	file_put_contents($root . '/plugins/mcp/endpoint.php', <<<'PHP'
-		<?php
-		ini_set('session.save_path', __DIR__ . '/../../sessions');
-		$_SERVER = json_decode($argv[1], true) + $_SERVER;
-		$_COOKIE = json_decode($argv[2], true);
-		$_GET = json_decode($argv[3], true);
-		$_POST = ['__csrf_magic' => 'x'];
-		$_REQUEST = $_GET + $_POST + $_COOKIE;
-		// Runs after every shutdown function registered later, so it sees the final status.
-		register_shutdown_function(fn () => register_shutdown_function(
-			fn () => file_put_contents(__DIR__ . '/../../status', (string) http_response_code())));
-		$mcp_bootstrap_options = ['methods' => json_decode($argv[4], true), 'content_type' => 'application/json',
-			'max_bytes' => 65536, 'bearer' => true, 'error_format' => $argv[5]];
-		$mcp_request = require __DIR__ . '/lib/bootstrap_cacti.php';
-		print json_encode(['request' => $mcp_request, 'during' => $fixture_during ?? null,
-			'method' => $_SERVER['REQUEST_METHOD'], 'session' => session_status(),
-			'poller' => fixture_config_poller(), 'sessionData' => $_SESSION ?? [], 'get' => $_GET]);
-		PHP);
-	$command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/plugins/mcp/endpoint.php') . ' '
-		. escapeshellarg(json_encode($server)) . ' ' . escapeshellarg(json_encode($cookie))
-		. ' ' . escapeshellarg(json_encode($get, JSON_FORCE_OBJECT)) . ' ' . escapeshellarg(json_encode($methods))
-		. ' ' . escapeshellarg($errorFormat);
-	$output  = (string) shell_exec($command);
-	$status  = (int) @file_get_contents($root . '/status');
-
-	$items = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
-		RecursiveIteratorIterator::CHILD_FIRST);
-
-	foreach ($items as $item) {
-		$item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
-	}
-	rmdir($root);
-
-	return (json_decode($output, true) ?? []) + ['_raw' => $output, '_status' => $status];
 }
 
 // cacti_include_at_file_scope

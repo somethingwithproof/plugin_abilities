@@ -126,7 +126,7 @@ function mcp_rpc_handle(string $httpMethod, array $headers, string $body, Abilit
 	try {
 		$message = json_decode($body, false, 32, JSON_THROW_ON_ERROR);
 	} catch (JsonException $error) {
-		return mcp_rpc_error(400, -32700, 'The body is not valid JSON.');
+		return mcp_rpc_error(400, -32700, 'The body is not valid JSON, or is nested more than 32 levels deep.');
 	}
 
 	// Batches are not supported: only a single request object is accepted.

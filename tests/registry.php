@@ -279,6 +279,22 @@ foreach ([['next' => 5, 'items' => []], ['next' => null, 'items' => [['n' => 11]
 $payload = ['next' => null, 'items' => []];
 check($rich->execute($principal, 'cacti-rich-out', (object) ['id' => 1], $audit)['result']['items'] === [], 'Empty array output');
 
+// empty objects: [] is the empty object wherever the schema declares one, at any depth
+$nested = new AbilitiesRegistry();
+$nested->registerCategory('fixtures', 'Fixtures');
+$nestedOutput = ['type' => 'object', 'properties' => [
+	'meta'  => ['type' => 'object', 'properties' => ['tags' => ['type' => 'object', 'properties' => [], 'additionalProperties' => false]], 'additionalProperties' => false],
+	'items' => ['type' => 'array', 'maxItems' => 5, 'items' => ['type' => 'object', 'properties' => [], 'additionalProperties' => false]]
+], 'required' => ['meta', 'items'], 'additionalProperties' => false];
+$nestedPayload = ['meta' => ['tags' => []], 'items' => [[], []]];
+$nested->register('cacti-nested-out', definition(['output_schema' => $nestedOutput, 'execute' => function () use (&$nestedPayload) { return $nestedPayload; }]));
+$result = $nested->execute($principal, 'cacti-nested-out', (object) ['id' => 1], $audit)['result'];
+check(json_encode($result) === '{"meta":{"tags":{}},"items":[{},{}]}', 'Nested empty arrays encode as objects: ' . json_encode($result));
+$nestedPayload = ['meta' => ['tags' => [1]], 'items' => []];
+rejects(fn () => $nested->execute($principal, 'cacti-nested-out', (object) ['id' => 1], $audit), 'INVALID_RESULT');
+$nestedPayload = ['meta' => ['tags' => [], 'extra' => 1], 'items' => []];
+rejects(fn () => $nested->execute($principal, 'cacti-nested-out', (object) ['id' => 1], $audit), 'INVALID_RESULT');
+
 foreach ([
 	['type' => 'array', 'items' => ['type' => 'string']],
 	['type' => 'array', 'maxItems' => 5],

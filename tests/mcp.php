@@ -210,6 +210,8 @@ check($r['status'] === 200 && $r['body']['error']['code'] === -32601, 'legacy un
 // malformed requests
 $r = rpc('{not json');
 check($r['status'] === 400 && $r['body']['error']['code'] === -32700 && !array_key_exists('id', $r['body']), 'parse error');
+$r = rpc(str_repeat('[', 40) . str_repeat(']', 40));
+check($r['status'] === 400 && $r['body']['error']['code'] === -32700 && str_contains($r['body']['error']['message'], 'nested'), 'too-deep JSON names the nesting limit');
 foreach (['[]', '[{"jsonrpc":"2.0","id":1,"method":"ping"}]', '"x"', '5', 'null', '{}',
 	'{"jsonrpc":"1.0","id":1,"method":"ping"}', '{"jsonrpc":"2.0","id":1}', '{"jsonrpc":"2.0","id":1,"method":5}',
 	'{"jsonrpc":"2.0","id":1.5,"method":"ping"}', '{"jsonrpc":"2.0","id":null,"method":"ping"}',

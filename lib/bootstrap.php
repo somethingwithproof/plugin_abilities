@@ -88,6 +88,7 @@ function mcp_bootstrap_validate(array $options, array $server, string $authoriza
 			throw new AbilitiesError('INVALID_ARGUMENT', 'UNSUPPORTED_MEDIA_TYPE', '', [], 415);
 		}
 
+		// An early refusal for honest clients; the cap that holds is mcp_read_body(), which counts the bytes it reads.
 		if ((int) ($server['CONTENT_LENGTH'] ?? 0) > $options['max_bytes']) {
 			throw new AbilitiesError('INVALID_ARGUMENT', 'REQUEST_TOO_LARGE', '', [], 413);
 		}

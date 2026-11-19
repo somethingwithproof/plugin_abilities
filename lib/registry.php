@@ -170,6 +170,40 @@ function abilities_validate(mixed $value, array $schema) : void {
 	}
 }
 
+/**
+ * Make every empty PHP array that the schema declares an object an actual empty object, at any depth,
+ * so it encodes as {} rather than []. A top-level result stays an array; the callers encode it as an object.
+ * Non-empty lists are left alone and fail validation.
+ */
+function abilities_normalize_output(mixed $value, array $schema, bool $top = true) : mixed {
+	$type = is_array($schema['type']) ? $schema['type'][0] : $schema['type'];
+
+	if ($type === 'object') {
+		if ($value === [] && !$top) {
+			return new stdClass();
+		}
+		$properties = (array) ($schema['properties'] ?? []);
+
+		if ($value instanceof stdClass) {
+			foreach (get_object_vars($value) as $name => $item) {
+				if (isset($properties[$name])) {
+					$value->$name = abilities_normalize_output($item, $properties[$name], false);
+				}
+			}
+		} elseif (is_array($value) && !array_is_list($value)) {
+			foreach ($value as $name => $item) {
+				if (isset($properties[$name])) {
+					$value[$name] = abilities_normalize_output($item, $properties[$name], false);
+				}
+			}
+		}
+	} elseif ($type === 'array' && is_array($value) && isset($schema['items'])) {
+		$value = array_map(fn ($item) => abilities_normalize_output($item, $schema['items'], false), $value);
+	}
+
+	return $value;
+}
+
 class AbilitiesRegistry {
 	public const ID_PATTERN        = '/^(?=.{1,64}$)[a-z][a-z0-9]*(-[a-z0-9]+){1,7}$/D';
 	private const CATEGORY_PATTERN = '/^[a-z][a-z0-9-]{0,31}$/D';
@@ -289,7 +323,7 @@ class AbilitiesRegistry {
 
 		try {
 			$result = ($entry['execute'])($principal['user_id'], $args);
-			$this->checkResult($result, $entry['output_schema']);
+			$result = $this->checkResult($result, $entry['output_schema']);
 		} catch (Throwable $error) {
 			$audit($requestId, $id, 'failed');
 
@@ -310,14 +344,15 @@ class AbilitiesRegistry {
 		}
 	}
 
-	/** The result must survive a JSON round trip and match the declared output schema exactly. */
-	private function checkResult(mixed $result, array $schema) : void {
+	/** The result must survive a JSON round trip and match the declared output schema exactly. Returns it with empty objects normalized. */
+	private function checkResult(mixed $result, array $schema) : array {
 		try {
 			// A non-empty list would be cast to an object with numeric keys; reject it instead.
 			if (!is_array($result) || ($result !== [] && array_is_list($result))) {
 				throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 			}
-			$json = json_encode((object) $result, JSON_THROW_ON_ERROR);
+			$result = abilities_normalize_output($result, $schema);
+			$json   = json_encode((object) $result, JSON_THROW_ON_ERROR);
 
 			if (strlen($json) > 1000000) {
 				throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
@@ -326,6 +361,8 @@ class AbilitiesRegistry {
 		} catch (AbilitiesError | JsonException $error) {
 			throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 		}
+
+		return $result;
 	}
 
 	private function sameAnnotations(array $annotations) : bool {

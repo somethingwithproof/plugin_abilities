@@ -136,7 +136,8 @@ function mcp_api_handle(string $method, string $pathInfo, array $query, string $
 			$ability = $match[1];
 			$result  = mcp_api_execute($match[1], $body, $registry, $principal, $audit);
 		} else {
-			throw new AbilitiesError('NOT_FOUND', 'UNKNOWN_PATH', "No route matches '" . substr($pathInfo, 0, 200) . "'.");
+			// The path is caller-controlled: keep printable ASCII only, so a truncated or invalid UTF-8 sequence cannot break the JSON body.
+			throw new AbilitiesError('NOT_FOUND', 'UNKNOWN_PATH', "No route matches '" . preg_replace('/[^\x20-\x7e]/', '?', substr($pathInfo, 0, 200)) . "'.");
 		}
 
 		return ['status' => 200, 'headers' => [], 'body' => $result];

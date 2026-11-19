@@ -52,6 +52,11 @@ try {
 
 http_response_code($mcp_response['status']);
 
+// A notification gets 202 and no body, so it carries no content type either.
+if ($mcp_json === '') {
+	header_remove('Content-Type');
+}
+
 foreach ($mcp_response['headers'] as $name => $value) {
 	header($name . ': ' . $value);
 }
