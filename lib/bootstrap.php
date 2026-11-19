@@ -1,0 +1,174 @@
+<?php
+/* SPDX-FileCopyrightText: 2026 Thomas Vincent
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+
+/* Request bootstrap for the token-only endpoints (api.php, mcp.php, and the
+ * OAuth token and register endpoints). Endpoints load lib/bootstrap_cacti.php,
+ * which calls these functions around the include of Cacti's global.php. */
+
+require_once __DIR__ . '/registry.php';
+require_once __DIR__ . '/aip.php';
+
+const MCP_BOOTSTRAP_DEFAULTS = [
+	'methods'      => ['POST'],
+	'content_type' => 'application/json',
+	'max_bytes'    => 65536,
+	'bearer'       => true,
+];
+
+function mcp_security_headers() : void {
+	header('Cache-Control: no-store');
+	header('X-Content-Type-Options: nosniff');
+	header('Content-Type: application/json; charset=utf-8');
+}
+
+/** Send an AIP-193 error and stop. */
+function mcp_bootstrap_reject(AbilitiesError $error, array $methods = []) : never {
+	$status = $error->httpStatus();
+	http_response_code($status);
+
+	if ($status === 401) {
+		header('WWW-Authenticate: Bearer');
+	} elseif ($status === 405) {
+		header('Allow: ' . implode(', ', $methods));
+	}
+	print json_encode(mcp_error_body($error), JSON_UNESCAPED_SLASHES);
+
+	exit;
+}
+
+/**
+ * Return the Authorization request header, or an empty string.
+ *
+ * Apache with PHP-FPM or CGI often drops HTTP_AUTHORIZATION, so fall back to
+ * the REDIRECT_ copy that mod_rewrite leaves and then to the raw request
+ * headers. The value is never taken from the query string, body, or cookies.
+ */
+function mcp_authorization_header(array $server, ?array $apacheHeaders) : string {
+	foreach (['HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION'] as $key) {
+		if (is_string($server[$key] ?? null) && $server[$key] !== '') {
+			return $server[$key];
+		}
+	}
+
+	foreach ($apacheHeaders ?? [] as $name => $value) {
+		if (is_string($name) && strcasecmp($name, 'Authorization') === 0 && is_string($value)) {
+			return $value;
+		}
+	}
+
+	return '';
+}
+
+/** Check method, content type, declared size, and bearer token shape. Throws AbilitiesError. */
+function mcp_bootstrap_validate(array $options, array $server, string $authorization) : void {
+	$options = $options + MCP_BOOTSTRAP_DEFAULTS;
+	$method  = $server['REQUEST_METHOD'] ?? '';
+
+	if (!in_array($method, $options['methods'], true)) {
+		throw new AbilitiesError('INVALID_ARGUMENT', 'METHOD_NOT_ALLOWED', '', [], 405);
+	}
+
+	if ($method === 'POST') {
+		$contentType = strtolower(trim(explode(';', (string) ($server['CONTENT_TYPE'] ?? ''))[0]));
+
+		if ($contentType !== $options['content_type']) {
+			throw new AbilitiesError('INVALID_ARGUMENT', 'UNSUPPORTED_MEDIA_TYPE', '', [], 415);
+		}
+
+		if ((int) ($server['CONTENT_LENGTH'] ?? 0) > $options['max_bytes']) {
+			throw new AbilitiesError('INVALID_ARGUMENT', 'REQUEST_TOO_LARGE', '', [], 413);
+		}
+	}
+
+	if ($options['bearer'] && !preg_match('/^Bearer cmcp_pat_[a-f0-9]{64}$/D', $authorization)) {
+		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
+	}
+}
+
+/** Read at most $maxBytes from $stream. A longer body is rejected, whatever CONTENT_LENGTH said. */
+function mcp_read_body(string $stream, int $maxBytes) : string {
+	$body = (string) file_get_contents($stream, false, null, 0, $maxBytes + 1);
+
+	if (strlen($body) > $maxBytes) {
+		throw new AbilitiesError('INVALID_ARGUMENT', 'REQUEST_TOO_LARGE', '', [], 413);
+	}
+
+	return $body;
+}
+
+/** Remove browser identity and hide the POST from Cacti's CSRF guard. */
+function mcp_prepare_request(array &$server, array &$post, array &$request, array &$cookie) : void {
+	$post    = [];
+	$request = [];
+	$cookie  = [];
+
+	$server['MCP_ORIGINAL_METHOD'] = $server['REQUEST_METHOD'];
+	$server['REQUEST_METHOD']      = 'MCP_POST';
+}
+
+/**
+ * Validate the request and prepare it for the include of Cacti's global.php.
+ *
+ * CSRF workaround (temporary). Cacti's CSRF guard checks every web POST once
+ * global.php loads: csrf_check() in csrf-magic on 1.2.x and include/csrf.php
+ * on develop. Hosted MCP and OAuth clients send JSON with a bearer token and
+ * cannot send a Cacti CSRF token, and neither supported Cacti version offers
+ * a supported way to exempt a web request. Both guards act only when
+ * REQUEST_METHOD is exactly 'POST', so for a POST this function empties
+ * $_POST, $_REQUEST, and $_COOKIE and renames the method to MCP_POST before
+ * global.php loads. The guard then skips the request, and Cacti finds no
+ * browser session to attach. mcp_bootstrap_finish() restores the method.
+ *
+ * This is safe because CSRF protects requests that a browser authenticates
+ * with cookies, and these endpoints never accept a cookie or session as
+ * identity: the caller authenticates with the bearer token only, which a
+ * cross-site page cannot attach. The workaround applies only to the endpoints
+ * that load lib/bootstrap_cacti.php. Console pages, including the OAuth
+ * consent page, are normal Cacti pages and keep full CSRF protection.
+ *
+ * Replace this with a supported core exemption once Cacti provides one,
+ * keeping the workaround only for Cacti versions without it.
+ *
+ * @return array{method: string, body: string, authorization: string}
+ */
+function mcp_bootstrap_preflight(array $options) : array {
+	$options = $options + MCP_BOOTSTRAP_DEFAULTS;
+	mcp_security_headers();
+
+	$apacheHeaders = function_exists('apache_request_headers') ? apache_request_headers() : null;
+	$authorization = mcp_authorization_header($_SERVER, is_array($apacheHeaders) ? $apacheHeaders : null);
+	$method        = $_SERVER['REQUEST_METHOD'] ?? '';
+
+	try {
+		mcp_bootstrap_validate($options, $_SERVER, $authorization);
+		$body = mcp_read_body('php://input', $options['max_bytes']);
+	} catch (AbilitiesError $error) {
+		mcp_bootstrap_reject($error, $options['methods']);
+	}
+
+	if ($method === 'POST') {
+		mcp_prepare_request($_SERVER, $_POST, $_REQUEST, $_COOKIE);
+	}
+
+	return ['method' => $method, 'body' => $body, 'authorization' => $authorization];
+}
+
+/** Undo the request preparation once global.php has loaded, then require the plugin to be serving. */
+function mcp_bootstrap_finish(array $request) : void {
+	global $config;
+
+	// global.php starts a session for every web request; this one carries no identity.
+	if (session_status() === PHP_SESSION_ACTIVE) {
+		session_destroy();
+	}
+	header_remove('Set-Cookie');
+	mcp_security_headers();
+
+	$_SERVER['REQUEST_METHOD'] = $_SERVER['MCP_ORIGINAL_METHOD'] ?? $request['method'];
+	unset($_SERVER['MCP_ORIGINAL_METHOD']);
+
+	if (!api_plugin_is_enabled('mcp') || (int) ($config['poller_id'] ?? 0) !== 1) {
+		mcp_bootstrap_reject(new AbilitiesError('UNAVAILABLE', 'PLUGIN_UNAVAILABLE'));
+	}
+}

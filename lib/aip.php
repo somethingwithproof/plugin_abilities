@@ -6,16 +6,19 @@
  * The grammar mirrors the core REST API helpers (rest_filter() and friends). */
 
 const MCP_ERROR_MESSAGES = [
-	'INVALID_TOKEN'       => 'The token is missing, malformed, expired, or revoked.',
-	'REALM_REQUIRED'      => 'The token owner lacks the realm required for this plugin.',
-	'ABILITY_UNAVAILABLE' => 'The ability does not exist or is not available to this user.',
-	'INVALID_ARGUMENTS'   => 'The arguments do not satisfy the ability schema.',
-	'INVALID_RESULT'      => 'The ability returned a result that does not satisfy its schema.',
-	'AUDIT_UNAVAILABLE'   => 'The audit log is unavailable, so the call was not executed.',
-	'DEVICE_NOT_FOUND'    => 'The device does not exist or is not visible to this user.',
-	'INVALID_PAGE_TOKEN'  => 'pageToken is invalid or does not match this query.',
-	'INVALID_FILTER'      => 'The filter expression is not valid.',
-	'PLUGIN_UNAVAILABLE'  => 'The plugin is disabled or this server is not the main poller.',
+	'INVALID_TOKEN'          => 'The token is missing, malformed, expired, or revoked.',
+	'REALM_REQUIRED'         => 'The token owner lacks the realm required for this plugin.',
+	'ABILITY_UNAVAILABLE'    => 'The ability does not exist or is not available to this user.',
+	'INVALID_ARGUMENTS'      => 'The arguments do not satisfy the ability schema.',
+	'INVALID_RESULT'         => 'The ability returned a result that does not satisfy its schema.',
+	'AUDIT_UNAVAILABLE'      => 'The audit log is unavailable, so the call was not executed.',
+	'DEVICE_NOT_FOUND'       => 'The device does not exist or is not visible to this user.',
+	'INVALID_PAGE_TOKEN'     => 'pageToken is invalid or does not match this query.',
+	'INVALID_FILTER'         => 'The filter expression is not valid.',
+	'PLUGIN_UNAVAILABLE'     => 'The plugin is disabled or this server is not the main poller.',
+	'METHOD_NOT_ALLOWED'     => 'The HTTP method is not allowed for this endpoint.',
+	'UNSUPPORTED_MEDIA_TYPE' => 'The request content type is not supported.',
+	'REQUEST_TOO_LARGE'      => 'The request body exceeds the size limit.',
 ];
 
 const MCP_PAGE_SIZE_DEFAULT = 50;
