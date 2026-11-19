@@ -256,8 +256,8 @@ versions. The core change is proposed upstream separately.
 - Methods: `initialize`, `ping`, `tools/list`, `tools/call`. Notifications
   get 202. Anything else is JSON-RPC `-32601`.
 - Supports protocol revisions 2025-11-25 and 2026-07-28. The server keeps no
-  per-session state, so the 2025-11-25 `Mcp-Session-Id` is issued but carries
-  no authority.
+  per-session state, so it never issues `Mcp-Session-Id` (optional in
+  2025-11-25 and removed in 2026-07-28) and ignores one if sent.
 - `tools/list` maps each discovered ability to a tool: name, title from
   `label`, description, `inputSchema`, `outputSchema`, and annotations
   (`readOnlyHint`, `destructiveHint`, `idempotentHint`).
