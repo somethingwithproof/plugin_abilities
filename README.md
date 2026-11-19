@@ -97,7 +97,10 @@ artifact from a successful
 [CI run](https://github.com/somethingwithproof/plugin_mcp/actions/workflows/ci.yml).
 It contains `mcp.tar.gz` and `SHA256SUMS`. Verify the checksum, then extract
 `mcp.tar.gz` inside Cacti's `plugins/` directory so the result is `plugins/mcp/`.
-GitHub's automatic source archives use a different top-level directory name.
+GitHub's automatic source archives use a different top-level directory name. The
+archive leaves out `docs/` (including the screenshots below), `tests/`, and
+`.github/`, so the README links into `docs/` work on GitHub but not in an installed
+copy.
 
 Then:
 
@@ -105,8 +108,9 @@ Then:
    administrator receives the **MCP Administration** realm automatically.
 2. Under Settings > MCP, set **Public Cacti URL** to the address clients use, for
    example `https://cacti.example.com/cacti`. HTTPS is required except for
-   `localhost`, `127.0.0.1`, and `[::1]`. `mcp.php` returns `FAILED_PRECONDITION`
-   (`PUBLIC_URL_REQUIRED`) until this is set. `api.php` does not read it.
+   `localhost`, `127.0.0.1`, and `[::1]`. Until this is set, `mcp.php` answers HTTP 400
+   with a JSON-RPC error whose `data` is `FAILED_PRECONDITION` and
+   `PUBLIC_URL_REQUIRED`. `api.php` does not read it.
 
    ![Settings > MCP showing the Public Cacti URL field](docs/images/settings-public-url.png)
 
@@ -204,7 +208,10 @@ Tokens are always created for a user, expire, and can be revoked:
   administer Cacti. It takes the token from the environment so the value never
   appears on a command line or in the process list. Lifetime is 1 to 365 days and
   defaults to 30. Creating and revoking a token through the CLI is audited like the
-  console, with the token's owner as the actor because the CLI has no Cacti user.
+  console, with the token's owner as the actor because the CLI has no Cacti user, so
+  the audit row does not mark the action as coming from the CLI. `--list` prints
+  every token as JSON (ID, owner, scopes, timestamps, revoked flag) and never the
+  token value; `--help` shows usage.
 
   ```console
   export CACTI_MCP_TOKEN="$(printf 'cmcp_pat_%s\n' "$(openssl rand -hex 32)")"
@@ -214,9 +221,11 @@ Tokens are always created for a user, expire, and can be revoked:
   php plugins/mcp/tokens.php --revoke=ID
   ```
 
-Tokens cannot be created for the guest account or for disabled users, from the
-console, the command line, or My MCP Tokens. A token whose owner becomes the guest
-account stops working on its next request.
+Tokens cannot be created for the guest account, for disabled users, or for users
+without the **MCP and Abilities API** realm, from the console, the command line, or
+My MCP Tokens. Cacti stores the guest setting as a username or a user ID, and the
+plugin resolves both. A token whose owner becomes the guest account stops working on
+its next request.
 
 ### My MCP Tokens
 
@@ -356,12 +365,31 @@ token and talks to `api.php`.
 ### MCP behavior
 
 The endpoint serves tools only: each exposed, permitted ability is a tool named by
-its ID, with its input and output schemas and read-only annotations. It keeps no
-session, does not send `Mcp-Session-Id`, and does not accept JSON-RPC batches.
-Only `POST` is allowed. An ability error comes back as a tool result with
-`isError: true`, not as a protocol error. Requests using the `2026-07-28`
-revision must carry matching `Mcp-Protocol-Version`, `Mcp-Method`, and (for
-`tools/call`) `Mcp-Name` headers.
+its ID, with its input and output schemas and read-only annotations
+(`openWorldHint` is `false`). It handles `initialize`, `server/discover`, `ping`,
+`tools/list`, and `tools/call`. It keeps no session, does not send `Mcp-Session-Id`
+(and ignores one it receives), and does not accept JSON-RPC batches. A message
+without an `id` is a notification and gets HTTP 202 with no body. Only `POST` is
+allowed.
+
+- **Revisions.** A request that carries `io.modelcontextprotocol/protocolVersion` in
+  `params._meta` must name `2026-07-28`; anything else gets error `-32022`. Such
+  requests must also carry matching `Mcp-Protocol-Version`, `Mcp-Method`, and (for
+  `tools/call`) `Mcp-Name` headers, or the answer is error `-32020`. Other requests
+  are treated as `2025-11-25`: `initialize` answers with that revision, and on any
+  other method an `Mcp-Protocol-Version` header, if sent, must be `2025-11-25`,
+  `2025-06-18`, or `2025-03-26`.
+- **Tool errors.** An ability error, including arguments that do not match the
+  schema or an `arguments` value that is not a JSON object, comes back as a tool
+  result with `isError: true` and the AIP-193 error in `structuredContent`, not as a
+  protocol error.
+- **Protocol errors.** Failures that are not tool errors are JSON-RPC error objects
+  (code `-32000` with the status and reason in `data`, or the standard codes): the
+  missing Public Cacti URL, a refused `Origin`, a request with the plugin disabled
+  or on a remote poller, and unexpected server errors (`-32603`, with the detail
+  written to the Cacti log, not the response). Request checks that run first (405,
+  413, 415) and authentication failures (401 `INVALID_TOKEN`, 403 `REALM_REQUIRED`)
+  keep the AIP-193 body described under HTTP API.
 
 ## HTTP API
 
@@ -384,8 +412,22 @@ curl -sS -H "Authorization: Bearer $CACTI_MCP_TOKEN" -H 'Content-Type: applicati
 
 Errors follow AIP-193: an `error` object with `code`, `message`, `status`, and
 `details` that carries an `ErrorInfo` with domain `cacti.net` and a stable `reason`.
-Request bodies are limited to 64 KB, and results to 1 MB. Both endpoints answer
-only on the main poller and return `UNAVAILABLE` (`PLUGIN_UNAVAILABLE`) elsewhere.
+Argument problems add a `BadRequest` detail naming the field. Request bodies are
+limited to 64 KB, and results to 1 MB. Both endpoints answer only on the main
+poller and return `UNAVAILABLE` (`PLUGIN_UNAVAILABLE`) when the plugin is disabled
+or the server is not the main poller.
+
+| HTTP | `reason` values |
+| --- | --- |
+| 400 | `INVALID_ARGUMENTS`, `INVALID_FILTER`, `INVALID_PAGE_TOKEN` |
+| 401 | `INVALID_TOKEN` (also sends `WWW-Authenticate: Bearer`) |
+| 403 | `REALM_REQUIRED` |
+| 404 | `ABILITY_NOT_FOUND`, `DEVICE_NOT_FOUND`, `UNKNOWN_PATH` |
+| 405 | `METHOD_NOT_ALLOWED` (sends `Allow`) |
+| 413 | `REQUEST_TOO_LARGE` |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` |
+| 500 | `INTERNAL_ERROR`, `INVALID_RESULT` |
+| 503 | `AUDIT_UNAVAILABLE`, `PLUGIN_UNAVAILABLE`, `CACTI_UNAVAILABLE` |
 
 ## Write an ability (plugin authors)
 
@@ -432,14 +474,15 @@ The rules, all enforced at registration:
   `category`, `input_schema`, `output_schema`, `annotations`, `permission`,
   `execute`. The category must already exist: use a built-in (`inventory`,
   `system`) or register your own with `registerCategory()`, whose ID is unique across
-  all plugins.
+  all plugins and matches `^[a-z][a-z0-9-]{0,31}$`.
 - **Read-only only.** `annotations` must be exactly `readOnly: true`,
   `destructive: false`, `idempotent: true`. Anything else throws.
 - **Schemas.** `input_schema` and `output_schema` must each have top-level
   `type` `object`. The dialect is small and fails closed. Objects must be closed
   (`additionalProperties: false`, with `properties` present); other types are
-  `integer`, `number`, `string` (`minLength`, `maxLength`, `enum`, `pattern`),
-  `boolean`, and `array` (which needs `items` and `maxItems`). A type may be
+  `integer` and `number` (`minimum`, `maximum`), `string` (`minLength`,
+  `maxLength`, `enum`, `pattern`), `boolean`, and `array` (which needs `items` and
+  `maxItems`). A type may be
   made nullable as `['string', 'null']`. Strings default to at most 4096
   characters. At most 256 abilities can register.
 - **`permission(int $userId): bool`.** Must return exactly `true` to allow. The
@@ -496,9 +539,17 @@ for them.
   outcome (`started`, `succeeded`, `failed`, `denied`, `rejected`), and timestamps.
   It never records arguments, results, or token values. An ability runs only after
   its `started` row is written; if the audit table is unavailable the call fails
-  with `UNAVAILABLE` and does not run. Token creation and revocation from the console and
-  from My MCP Tokens are recorded as `mcp-token-create` and `mcp-token-revoke`. Discovery is not logged.
-- **Main poller only.**
+  with `UNAVAILABLE` and does not run. A call refused before it runs is one row: `denied`
+  for an unknown, hidden, or unpermitted ability, `rejected` for arguments that fail the
+  schema. Token creation and revocation from the console, My MCP Tokens, and the CLI are
+  recorded as `mcp-token-create` and `mcp-token-revoke` with outcome `succeeded`, and a
+  revocation is recorded only for a token that was active. Discovery, and a call whose
+  `arguments` is not a JSON object, are not logged.
+- **Failure log.** An unexpected failure, `INVALID_RESULT`, or an unavailable audit
+  table writes one line to the Cacti log with facility `MCP`: the ability ID, a fixed
+  reason, and the exception class. Messages, arguments, and tokens are never logged.
+- **Main poller only.** Both endpoints, both console pages, and `tokens.php` refuse to
+  act anywhere else.
 
 ## Lifecycle
 
@@ -517,8 +568,8 @@ for t in tests/*.php; do php "$t" || break; done
 git archive --format=tar.gz --prefix=mcp/ HEAD > mcp.tar.gz
 ```
 
-CI lints PHP and runs every script in `tests/` on PHP 8.2 through 8.5, then
-builds the installable `mcp/` archive and its checksum. Tests that touch Cacti use
+CI lints PHP and runs the scripts in `tests/` (each is listed in
+`.github/workflows/ci.yml`) on PHP 8.2 through 8.5, then builds the installable `mcp/` archive and its checksum. Tests that touch Cacti use
 fixtures at the Cacti helper boundary; they do not exercise a full Cacti install.
 
 ## Contributing
