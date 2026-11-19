@@ -14,6 +14,7 @@ const MCP_BOOTSTRAP_DEFAULTS = [
 	'content_type' => 'application/json',
 	'max_bytes'    => 65536,
 	'bearer'       => true,
+	'error_format' => 'aip',
 ];
 
 function mcp_security_headers() : void {
@@ -164,16 +165,70 @@ function mcp_bootstrap_preflight(array $options) : array {
 	return ['method' => $method, 'body' => $body, 'authorization' => $authorization];
 }
 
-/** Undo the request preparation once global.php has loaded, then require the plugin to be serving. */
-function mcp_bootstrap_finish(array $request) : void {
-	global $config;
+/** True once mcp_bootstrap_finish() has started; until then Cacti's output is discarded. */
+function mcp_bootstrap_complete(?bool $complete = null) : bool {
+	static $state = false;
 
-	// global.php starts a session for every web request; this one carries no identity.
+	if ($complete !== null) {
+		$state = $complete;
+	}
+
+	return $state;
+}
+
+/** Output buffer callback around the include of global.php. */
+function mcp_bootstrap_buffer(string $buffer, int $phase) : string {
+	return mcp_bootstrap_complete() ? $buffer : '';
+}
+
+/** The body sent when global.php exits or fails before returning. */
+function mcp_bootstrap_unavailable_body(string $format) : array {
+	if ($format === 'jsonrpc') {
+		return ['jsonrpc' => '2.0', 'error' => [
+			'code'    => -32000,
+			'message' => 'Cacti is not available.',
+			'data'    => ['status' => 'UNAVAILABLE', 'reason' => 'CACTI_UNAVAILABLE'],
+		]];
+	}
+
+	return mcp_error_body(new AbilitiesError('UNAVAILABLE', 'CACTI_UNAVAILABLE', 'Cacti is not available.', [], 503));
+}
+
+/**
+ * Shutdown function registered before the include of global.php. global.php
+ * prints a page and exits on some failures, such as a database that is down.
+ * Shutdown functions run before PHP flushes output buffers, so this replaces
+ * that page with a JSON 503. It does nothing once the bootstrap completed.
+ */
+function mcp_bootstrap_shutdown(string $format, int $bufferLevel) : void {
+	if (mcp_bootstrap_complete()) {
+		return;
+	}
+
+	while (ob_get_level() > $bufferLevel && ob_end_clean()) {
+	}
+	mcp_bootstrap_end_session();
+	http_response_code(503);
+	mcp_security_headers();
+	header_remove('Set-Cookie');
+	print json_encode(mcp_bootstrap_unavailable_body($format), JSON_UNESCAPED_SLASHES);
+}
+
+/** global.php starts a session for every web request; this one carries no identity. */
+function mcp_bootstrap_end_session() : void {
 	if (session_status() === PHP_SESSION_ACTIVE) {
 		session_unset();
 		$_SESSION = [];
 		session_destroy();
 	}
+}
+
+/** Undo the request preparation once global.php has loaded, then require the plugin to be serving. */
+function mcp_bootstrap_finish(array $request) : void {
+	global $config;
+
+	mcp_bootstrap_complete(true);
+	mcp_bootstrap_end_session();
 	header_remove('Set-Cookie');
 	mcp_security_headers();
 

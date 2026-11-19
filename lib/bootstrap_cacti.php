@@ -16,7 +16,11 @@ require_once __DIR__ . '/bootstrap.php';
 
 $mcp_request      = mcp_bootstrap_preflight($mcp_bootstrap_options ?? []);
 $mcp_buffer_level = ob_get_level();
-ob_start();
+
+// If global.php exits instead of returning, answer with a JSON 503, not its page.
+register_shutdown_function('mcp_bootstrap_shutdown',
+	($mcp_bootstrap_options['error_format'] ?? 'aip') === 'jsonrpc' ? 'jsonrpc' : 'aip', $mcp_buffer_level);
+ob_start('mcp_bootstrap_buffer');
 
 require __DIR__ . '/../../../include/global.php';
 

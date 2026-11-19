@@ -105,7 +105,8 @@ foreach (['METHOD_NOT_ALLOWED', 'UNSUPPORTED_MEDIA_TYPE', 'REQUEST_TOO_LARGE', '
 /* The include runs in a separate PHP process inside a fixture layout:
  * <root>/include/global.php stands in for Cacti, and the plugin's lib files
  * are copied to <root>/plugins/mcp/lib. */
-function run_fixture(array $server, array $cookie, array $get = [], array $methods = ['POST']) : array {
+function run_fixture(array $server, array $cookie, array $get = [], array $methods = ['POST'],
+	string $errorFormat = 'aip', bool $cactiExits = false) : array {
 	$root = sys_get_temp_dir() . '/mcp-bootstrap-' . bin2hex(random_bytes(6));
 	mkdir($root . '/include', 0700, true);
 	mkdir($root . '/plugins/mcp/lib', 0700, true);
@@ -131,6 +132,20 @@ function run_fixture(array $server, array $cookie, array $get = [], array $metho
 		$_SESSION['sess_user_id'] = 5;
 		print '<html>Cacti page output</html>';
 		PHP);
+
+	if ($cactiExits) {
+		/* Like global.php when the database is down: a nested buffer, an HTML
+		 * page, then exit. The flushes push the page through the bootstrap
+		 * buffer before shutdown, so its callback must discard it. */
+		file_put_contents($root . '/include/global.php', <<<'PHP'
+			<?php
+			ob_start(fn ($buffer) => $buffer);
+			print '<p>FATAL: Connection to Cacti database failed.</p>';
+			ob_end_flush();
+			ob_flush();
+			exit;
+			PHP);
+	}
 	file_put_contents($root . '/plugins/mcp/endpoint.php', <<<'PHP'
 		<?php
 		ini_set('session.save_path', __DIR__ . '/../../sessions');
@@ -139,8 +154,11 @@ function run_fixture(array $server, array $cookie, array $get = [], array $metho
 		$_GET = json_decode($argv[3], true);
 		$_POST = ['__csrf_magic' => 'x'];
 		$_REQUEST = $_GET + $_POST + $_COOKIE;
+		// Runs after every shutdown function registered later, so it sees the final status.
+		register_shutdown_function(fn () => register_shutdown_function(
+			fn () => file_put_contents(__DIR__ . '/../../status', (string) http_response_code())));
 		$mcp_bootstrap_options = ['methods' => json_decode($argv[4], true), 'content_type' => 'application/json',
-			'max_bytes' => 65536, 'bearer' => true];
+			'max_bytes' => 65536, 'bearer' => true, 'error_format' => $argv[5]];
 		$mcp_request = require __DIR__ . '/lib/bootstrap_cacti.php';
 		print json_encode(['request' => $mcp_request, 'during' => $fixture_during ?? null,
 			'method' => $_SERVER['REQUEST_METHOD'], 'session' => session_status(),
@@ -148,8 +166,10 @@ function run_fixture(array $server, array $cookie, array $get = [], array $metho
 		PHP);
 	$command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/plugins/mcp/endpoint.php') . ' '
 		. escapeshellarg(json_encode($server)) . ' ' . escapeshellarg(json_encode($cookie))
-		. ' ' . escapeshellarg(json_encode($get, JSON_FORCE_OBJECT)) . ' ' . escapeshellarg(json_encode($methods));
-	$output  = shell_exec($command);
+		. ' ' . escapeshellarg(json_encode($get, JSON_FORCE_OBJECT)) . ' ' . escapeshellarg(json_encode($methods))
+		. ' ' . escapeshellarg($errorFormat);
+	$output  = (string) shell_exec($command);
+	$status  = (int) @file_get_contents($root . '/status');
 
 	$items = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
 		RecursiveIteratorIterator::CHILD_FIRST);
@@ -159,7 +179,7 @@ function run_fixture(array $server, array $cookie, array $get = [], array $metho
 	}
 	rmdir($root);
 
-	return json_decode((string) $output, true) ?? ['raw' => $output];
+	return (json_decode($output, true) ?? []) + ['_raw' => $output, '_status' => $status];
 }
 
 // cacti_include_at_file_scope
@@ -191,5 +211,27 @@ $result = run_fixture($post, ['Cacti' => 'session-id']);
 check(($result['error']['code'] ?? null) === 401, 'Missing token not rejected: ' . json_encode($result));
 check($result['error']['details'][0]['reason'] === 'INVALID_TOKEN', 'Wrong reason');
 check(!isset($result['during']), 'Cacti loaded for a rejected request');
+
+// cacti_exit_is_json_aip
+$result = run_fixture(['HTTP_AUTHORIZATION' => $token] + $post, [], [], ['POST'], 'aip', true);
+check($result['_status'] === 503, 'Cacti exit did not give 503: ' . $result['_status']);
+check(!str_contains($result['_raw'], '<'), 'HTML leaked: ' . $result['_raw']);
+check(($result['error']['code'] ?? null) === 503 && $result['error']['status'] === 'UNAVAILABLE'
+	&& $result['error']['details'][0]['reason'] === 'CACTI_UNAVAILABLE', 'Wrong AIP body: ' . $result['_raw']);
+check($result['error']['message'] === 'Cacti is not available.', 'Wrong message');
+
+// cacti_exit_is_json_rpc
+$result = run_fixture(['HTTP_AUTHORIZATION' => $token] + $post, [], [], ['POST'], 'jsonrpc', true);
+check($result['_status'] === 503, 'Cacti exit did not give 503: ' . $result['_status']);
+check(!str_contains($result['_raw'], '<'), 'HTML leaked: ' . $result['_raw']);
+check(($result['jsonrpc'] ?? null) === '2.0' && !array_key_exists('id', $result) && $result['error']['code'] === -32000
+	&& $result['error']['data'] === ['status' => 'UNAVAILABLE', 'reason' => 'CACTI_UNAVAILABLE'], 'Wrong JSON-RPC body: ' . $result['_raw']);
+
+// success_status_untouched (the CLI reports no status unless one was set)
+$result = run_fixture(['HTTP_AUTHORIZATION' => $token] + $post, []);
+check($result['_status'] !== 503 && isset($result['request']), 'Completed bootstrap changed: ' . $result['_raw']);
+
+// unavailable_message_defined
+check(isset(MCP_ERROR_MESSAGES['CACTI_UNAVAILABLE']), 'No default message for CACTI_UNAVAILABLE');
 
 print "bootstrap tests passed\n";

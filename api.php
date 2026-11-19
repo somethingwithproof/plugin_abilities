@@ -8,7 +8,7 @@
 ini_set('display_errors', '0');
 require_once __DIR__ . '/lib/bootstrap.php';
 
-$mcp_bootstrap_options = ['methods' => ['GET', 'POST'], 'content_type' => 'application/json', 'max_bytes' => 65536, 'bearer' => true];
+$mcp_bootstrap_options = ['methods' => ['GET', 'POST'], 'content_type' => 'application/json', 'max_bytes' => 65536, 'bearer' => true, 'error_format' => 'aip'];
 $mcp_request           = require __DIR__ . '/lib/bootstrap_cacti.php';
 
 require_once __DIR__ . '/lib/storage.php';
