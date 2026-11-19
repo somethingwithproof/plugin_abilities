@@ -29,6 +29,14 @@ function db_table_exists($table, $log = true, $db_conn = false) {
 	return isset($tables[$table]);
 }
 
+function db_column_exists($table, $column, $log = true, $db_conn = false) {
+	return true;
+}
+
+function db_add_column($table, $column, $log = true, $db_conn = false) {
+	return true;
+}
+
 function db_execute($sql, $log = true, $db_conn = false) {
 	global $tables, $revoked, $failCreate, $failRevoke;
 

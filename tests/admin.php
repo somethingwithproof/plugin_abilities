@@ -311,6 +311,12 @@ function db_execute($sql) {
 
 	return true;
 }
+function db_column_exists($table, $column, $log = true, $db_conn = false) {
+	return true;
+}
+function db_add_column($table, $column, $log = true, $db_conn = false) {
+	throw new LogicException('No column should be added when all exist');
+}
 mcp_install_schema();
 $tokenTable = array_values(array_filter($created, fn ($sql) => str_contains($sql, 'CREATE TABLE IF NOT EXISTS plugin_mcp_token')))[0];
 check(str_contains($tokenTable, 'created_at BIGINT UNSIGNED NOT NULL DEFAULT 0') && str_contains($tokenTable, 'created_by INT UNSIGNED NOT NULL') && str_contains($tokenTable, 'last_used_at BIGINT UNSIGNED NULL'), 'Token table has created_at and last_used_at');

@@ -189,7 +189,21 @@ function db_execute($sql) {
 
 	return true;
 }
+$existingColumns = ['created_at'];
+$addedColumns    = [];
+function db_column_exists($table, $column, $log = true, $db_conn = false) {
+	global $existingColumns;
+
+	return $table === 'plugin_mcp_token' && in_array($column, $existingColumns, true);
+}
+function db_add_column($table, $column, $log = true, $db_conn = false) {
+	global $addedColumns;
+	$addedColumns[] = $table . '.' . $column['name'];
+
+	return true;
+}
 mcp_install_schema();
+check($addedColumns === ['plugin_mcp_token.created_by', 'plugin_mcp_token.last_used_at'], 'Install adds token columns an earlier build left out');
 check(count(array_filter($created, fn ($sql) => str_contains($sql, 'CREATE TABLE IF NOT EXISTS plugin_mcp_ability')
 	&& str_contains($sql, 'id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY') && str_contains($sql, 'exposed TINYINT UNSIGNED NOT NULL')
 	&& str_contains($sql, 'updated_at BIGINT UNSIGNED NOT NULL'))) === 1, 'Exposure table definition');

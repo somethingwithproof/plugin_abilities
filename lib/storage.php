@@ -43,6 +43,20 @@ function mcp_install_schema() : void {
 			throw new RuntimeException('MCP schema creation failed');
 		}
 	}
+
+	// The token table survives uninstall, and earlier development builds created it without these
+	// columns. CREATE TABLE IF NOT EXISTS leaves such a table as it is, so add what is missing.
+	$tokenColumns = [
+		['name' => 'created_at', 'type' => 'BIGINT UNSIGNED', 'NULL' => false, 'default' => '0', 'after' => 'revoked'],
+		['name' => 'created_by', 'type' => 'INT UNSIGNED', 'NULL' => false, 'default' => '0', 'after' => 'created_at'],
+		['name' => 'last_used_at', 'type' => 'BIGINT UNSIGNED', 'NULL' => true, 'after' => 'created_by']
+	];
+
+	foreach ($tokenColumns as $column) {
+		if (!db_column_exists('plugin_mcp_token', $column['name']) && !db_add_column('plugin_mcp_token', $column)) {
+			throw new RuntimeException('MCP schema upgrade failed');
+		}
+	}
 }
 
 function mcp_has_realm(int $userId) : bool {
