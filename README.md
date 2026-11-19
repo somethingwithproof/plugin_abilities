@@ -37,6 +37,8 @@ Available today:
 - Personal access tokens (`cmcp_pat_...`) as the only credential.
 - The Management > MCP console: expose or hide abilities, create and revoke
   tokens, read the audit log.
+- Management > My MCP Tokens: users manage their own tokens, see their activity,
+  and see which tools their tokens can use.
 - MCP over Streamable HTTP, protocol revisions `2026-07-28` and `2025-11-25`,
   tools only.
 
@@ -105,6 +107,9 @@ Then:
    example `https://cacti.example.com/cacti`. HTTPS is required except for
    `localhost`, `127.0.0.1`, and `[::1]`. `mcp.php` returns `FAILED_PRECONDITION`
    (`PUBLIC_URL_REQUIRED`) until this is set. `api.php` does not read it.
+
+   ![Settings > MCP showing the Public Cacti URL field](docs/images/settings-public-url.png)
+
 3. Grant the **MCP and Abilities API** realm to each user who will own a token.
    No user receives it automatically.
 4. Make sure the web server passes the `Authorization` header and path info to PHP
@@ -158,6 +163,7 @@ configuration needs `try_files`, save the value first with
 ## Console
 
 Management > MCP has three tabs. You need the **MCP Administration** realm.
+Screenshots here and below are from a Cacti development build with example data.
 
 - **Abilities** lists every registered ability with its plugin, category, the
   realm it needs, and whether it is exposed. Select rows and choose Expose or
@@ -165,11 +171,17 @@ Management > MCP has three tabs. You need the **MCP Administration** realm.
   exposed by default. Abilities from other plugins start hidden, so installing a
   plugin never publishes anything until an administrator decides to. Exposure
   narrows access only: a user still needs the ability's realm.
+
+  ![Abilities tab listing the built-in abilities with their realms and exposure state](docs/images/console-abilities.png)
 - **Tokens** lists tokens with owner, creator, creation, expiry, last use, and
   state (Active, Expired, Revoked). Select rows and choose Revoke to revoke them.
   Revoked tokens cannot be used again. Create Token makes a new one.
+
+  ![Tokens tab listing tokens with owner, expiry, last use, and state, above the Create Token form](docs/images/console-tokens.png)
 - **Audit** lists audit rows, newest first, and filters by user, ability, and
   outcome.
+
+  ![Audit tab listing calls with user, token, ability, and outcome, with filters](docs/images/console-audit.png)
 
 ## Tokens
 
@@ -213,6 +225,8 @@ appears only for users who hold it. The page always acts on the signed-in user.
 Cacti's menu is part of the console, so a user without console access reaches the
 page by its address.
 
+![My Tokens tab listing the signed-in user's tokens and the create form](docs/images/my-tokens.png)
+
 - **Tokens** lists your tokens, creates one (1 to 365 days, default 90, shown once
   in the response), and revokes your own. You cannot see or revoke anyone else's.
 - **Activity** lists the actions you performed, newest first: calls made with your
@@ -220,6 +234,8 @@ page by its address.
 - **Available Tools** lists the abilities a token of yours can use right now, with
   each ability's ID, name, and description. It follows your Cacti permissions and
   the exposure settings an administrator chose.
+
+  ![Available Tools list showing each ability's ID, name, and description](docs/images/my-tools.png)
 
 An installation made before this page existed has a realm file list without
 `mcp_tokens.php`. Install registers the list; it is not updated by enabling or
@@ -229,8 +245,9 @@ again, because Cacti removes realm grants when a plugin is uninstalled.
 The database stores only the SHA-256 hash of the token, so a lost token cannot be
 recovered; revoke it and create another. Rotation is the same: create a new token,
 switch the client, then revoke the old one. An expired token, a revoked token, a
-disabled owner, or a lost realm each fail on the next request. Tokens are accepted only in the `Authorization: Bearer`
-header; a token in the query string or body is not accepted.
+disabled owner, or a lost realm each fail on the next request. Tokens are accepted
+only in the `Authorization: Bearer` header; a token in the query string or body is
+not accepted.
 
 ## Connect a client
 
@@ -478,8 +495,8 @@ for them.
   outcome (`started`, `succeeded`, `failed`, `denied`, `rejected`), and timestamps.
   It never records arguments, results, or token values. An ability runs only after
   its `started` row is written; if the audit table is unavailable the call fails
-  with `UNAVAILABLE` and does not run. Token creation and revocation in the console
-  are recorded as `mcp-token-create` and `mcp-token-revoke`. Discovery is not logged.
+  with `UNAVAILABLE` and does not run. Token creation and revocation from the console and
+  from My MCP Tokens are recorded as `mcp-token-create` and `mcp-token-revoke`. Discovery is not logged.
 - **Main poller only.**
 
 ## Lifecycle
