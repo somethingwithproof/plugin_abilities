@@ -216,6 +216,16 @@ check($registry->get($principal, 'fixture-half-done') === null, 'Partial registr
 check(count(array_filter($logs, fn ($log) => str_contains($log[0], 'registration failed'))) === 1, 'Failure logged once');
 check($logs[0] === ['MCP: ability registration failed for plugin fixture (RuntimeException)', false, 'MCP'], 'Failure log text');
 
+// an anonymous exception from a plugin hook is logged without its generated class name
+function fixture_anonymous($registrar) {
+	throw new class('plugin failed') extends RuntimeException {};
+}
+
+$hooks = [['name' => 'fixture', 'file' => 'setup.php', 'function' => 'fixture_anonymous']];
+$logs  = [];
+mcp_registry();
+check($logs === [['MCP: ability registration failed for plugin fixture (RuntimeException@anonymous)', false, 'MCP']], 'Anonymous exception logged by parent: ' . json_encode($logs));
+
 // reserved_namespace: a plugin named cacti cannot register as a built-in
 $hooks = [['name' => 'cacti', 'file' => 'setup.php', 'function' => 'fixture_register'], ['name' => 'cacti', 'file' => 'setup.php', 'function' => 'fixture_spoof']];
 $logs  = [];

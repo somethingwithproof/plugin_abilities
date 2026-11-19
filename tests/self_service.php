@@ -14,6 +14,7 @@ $audit        = [];
 $affected     = 0;
 $optionReads  = [];
 $failAudit    = false;
+$guestLookupFails = false;
 
 function check(bool $ok, string $message) : void {
 	if (!$ok) {
@@ -31,6 +32,13 @@ function throws(callable $call, string $class) : void {
 	}
 
 	throw new RuntimeException('Expected ' . $class);
+}
+
+$logs = [];
+
+function cacti_log($message, $output = false, $facility = '') {
+	global $logs;
+	$logs[] = [$message, $output, $facility];
 }
 
 function __($text, ...$args) {
@@ -55,14 +63,6 @@ function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true,
 
 	if (str_contains($sql, 'FROM plugin_realms')) {
 		return 9;
-	}
-
-	// The guest setting holds a user ID or a username.
-	if (str_starts_with($sql, 'SELECT id FROM user_auth WHERE username = ?')) {
-		return match ($params[0]) {
-			3, '3', 'guestuser' => 3,
-			default => false,
-		};
 	}
 
 	if (str_starts_with($sql, 'SELECT id FROM plugin_mcp_token WHERE token_hash')) {
@@ -97,7 +97,19 @@ function db_fetch_row_prepared($sql, $params = [], $log = true, $db_conn = false
 }
 
 function db_fetch_assoc_prepared($sql, $params = []) {
-	global $tokens;
+	global $tokens, $guestLookupFails;
+
+	// The guest setting holds a user ID or a username.
+	if (str_starts_with($sql, 'SELECT id FROM user_auth WHERE username = ?')) {
+		if ($guestLookupFails) {
+			return false;
+		}
+
+		return match ($params[0]) {
+			3, '3', 'guestuser' => [['id' => '3']],
+			default => [],
+		};
+	}
 
 	// SELECT id FROM plugin_mcp_token WHERE id IN (...) AND revoked = 0 [AND user_id = ?]
 	check(str_starts_with($sql, 'SELECT id FROM plugin_mcp_token WHERE id IN ('), 'Unexpected select: ' . $sql);
@@ -215,6 +227,24 @@ $config['guest_user'] = '';
 check(mcp_guest_user_id() === 0, 'An empty setting is no guest');
 $config['guest_user'] = 'nosuchuser';
 check(mcp_guest_user_id() === 0, 'A setting that matches no user is no guest');
+// A guest is configured but the lookup query fails: refuse authentication and eligibility, and never log the setting.
+$config['guest_user'] = 'guestuser';
+$guestLookupFails     = true;
+$logs                 = [];
+
+try {
+	mcp_authenticate('Bearer ' . $token);
+
+	throw new LogicException('A failed guest lookup must refuse authentication');
+} catch (AbilitiesError $error) {
+	check($error->status === 'UNAVAILABLE' && $error->reason === 'INTERNAL_ERROR', 'A failed guest lookup refuses with a server error');
+}
+throws(fn () => mcp_token_assert_eligible(2), InvalidArgumentException::class);
+throws(fn () => mcp_token_create(2, 30), InvalidArgumentException::class);
+check($logs !== [] && !str_contains(json_encode($logs), 'guestuser'), 'The failure is logged without the setting value');
+$config['guest_user'] = '';
+check(mcp_authenticate('Bearer ' . $token)['user_id'] === 2, 'With no guest configured nothing is looked up');
+$guestLookupFails     = false;
 $config['guest_user'] = 3;
 $optionReads = [];
 mcp_authenticate('Bearer ' . $token);

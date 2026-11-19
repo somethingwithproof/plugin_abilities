@@ -226,7 +226,7 @@ function mcp_dispatch_ability_hooks(AbilitiesRegistry $registry) : void {
 			($hook['function'])(new AbilitiesRegistrar($scratch, $name));
 			$registry->adopt($scratch);
 		} catch (Throwable $error) {
-			cacti_log('MCP: ability registration failed for plugin ' . $name . ' (' . $error::class . ')', false, 'MCP');
+			cacti_log('MCP: ability registration failed for plugin ' . $name . ' (' . mcp_exception_class($error) . ')', false, 'MCP');
 		}
 	}
 }

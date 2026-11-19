@@ -137,6 +137,12 @@ $trail = [];
 // An over-long or odd identifier is not written to the audit log verbatim.
 rejects(fn () => $registry->execute($principal, str_repeat('x', 300), (object) [], $audit), 'ABILITY_NOT_FOUND');
 check($trail[0][2] === 'denied' && strlen($trail[0][1]) <= 64, 'Denied audit name is bounded');
+// An anonymous exception class is logged by its parent, without the NUL and file path in its generated name.
+$logs = [];
+rejects(fn () => $registry->execute($principal, 'cacti-missing-thing', (object) [], function () { throw new class('x') extends RuntimeException {}; }), 'ABILITY_NOT_FOUND');
+check($logs === [['MCP: ability cacti-missing-thing failed: AUDIT_REFUSAL_FAILED (RuntimeException@anonymous)', false, 'MCP']]
+	&& !str_contains($logs[0][0], "\0"), 'Anonymous exception class is logged by parent');
+check(mcp_exception_class(new class extends Exception {}) === 'Exception@anonymous' && mcp_exception_class(new LogicException()) === 'LogicException', 'Class names for the log');
 // A failing audit write must not turn a denial into a different error.
 $logs = [];
 rejects(fn () => $registry->execute($principal, 'cacti-missing-thing', (object) [], function () { throw new RuntimeException('db password in message'); }), 'ABILITY_NOT_FOUND');

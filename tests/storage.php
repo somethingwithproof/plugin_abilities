@@ -19,6 +19,10 @@ function db_execute_prepared($sql, $params = [], $log = true, $db_conn = false) 
 
 function db_fetch_assoc_prepared($sql, $params = []) {
 	global $exposureRows, $reads;
+
+	if (str_starts_with($sql, 'SELECT id FROM user_auth WHERE username = ?')) {
+		return [];
+	}
 	check($sql === 'SELECT id, exposed FROM plugin_mcp_ability' && $params === [], 'Exposure query');
 	$reads++;
 

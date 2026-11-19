@@ -349,9 +349,7 @@ msgid "The available tools could not be listed."
 msgstr ""
 
 #: mcp_admin.php
-msgid ""
-"The exposure change could not be saved, and some abilities may have changed. "
-"Check the Exposed column."
+msgid "The exposure change could not be saved. Nothing was changed."
 msgstr ""
 
 #: mcp_admin.php

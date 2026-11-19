@@ -107,7 +107,11 @@ function db_affected_rows($db_conn = false) {
 }
 
 function db_fetch_assoc_prepared($sql, $params = []) {
-	global $queries;
+	global $queries, $guestId;
+
+	if (str_starts_with($sql, 'SELECT id FROM user_auth WHERE username = ?')) {
+		return $params[0] === $guestId ? [['id' => (string) $guestId]] : [];
+	}
 	$queries[] = [$sql, $params];
 
 	return [['id' => '1']];

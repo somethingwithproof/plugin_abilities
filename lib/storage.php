@@ -66,6 +66,7 @@ function mcp_token_hash(string $token) : ?string {
  * (get_guest_account() matches both, and no 1.2.x upgrade step converts old values), so it is resolved
  * the same way. get_guest_account() reads the cached option, so $fresh is for session-bearing console
  * paths, where a stale cache would still treat an account made the guest after sign-in as ordinary.
+ * When a guest is configured but cannot be looked up, it throws RuntimeException so callers fail closed.
  */
 function mcp_guest_user_id(bool $fresh = false) : int {
 	$setting = read_config_option('guest_user', $fresh);
@@ -73,9 +74,14 @@ function mcp_guest_user_id(bool $fresh = false) : int {
 	if ($setting === '' || $setting === null || $setting === false || $setting === 0 || $setting === '0') {
 		return 0;
 	}
-	$id = db_fetch_cell_prepared('SELECT id FROM user_auth WHERE username = ? OR id = ?', [$setting, $setting]);
+	// The assoc fetch returns [] for no match and false only when the query fails; a cell fetch cannot tell them apart.
+	$rows = db_fetch_assoc_prepared('SELECT id FROM user_auth WHERE username = ? OR id = ? LIMIT 1', [$setting, $setting]);
 
-	return empty($id) ? 0 : (int) $id;
+	if ($rows === false) {
+		throw new RuntimeException('MCP guest account lookup failed');
+	}
+
+	return $rows === [] ? 0 : (int) $rows[0]['id'];
 }
 
 function mcp_authenticate(string $header) : array {
@@ -95,7 +101,14 @@ function mcp_authenticate(string $header) : array {
 	$userId = (int) $row['user_id'];
 
 	// A guest account never holds a personal token; one minted before the account became the guest stops working.
-	$guestId = mcp_guest_user_id();
+	try {
+		$guestId = mcp_guest_user_id();
+	} catch (RuntimeException $error) {
+		// Without the guest ID the check cannot pass; refuse rather than let a guest token through.
+		mcp_log_failure('', 'GUEST_LOOKUP_FAILED', $error);
+
+		throw new AbilitiesError('UNAVAILABLE', 'INTERNAL_ERROR');
+	}
 
 	if ($guestId > 0 && $userId === $guestId) {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
@@ -285,7 +298,13 @@ function mcp_token_assert_eligible(int $userId) : void {
 
 	// Forced read: a console session caches options, so an account made the guest after sign-in
 	// would otherwise still pass. The endpoints have no session and keep the cached read.
-	if (!is_array($user) || !mcp_token_eligible($user, mcp_guest_user_id(true))) {
+	try {
+		$guestId = mcp_guest_user_id(true);
+	} catch (RuntimeException $error) {
+		throw new InvalidArgumentException('User is not eligible for a token');
+	}
+
+	if (!is_array($user) || !mcp_token_eligible($user, $guestId)) {
 		throw new InvalidArgumentException('User is not eligible for a token');
 	}
 }
