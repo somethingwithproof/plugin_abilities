@@ -85,6 +85,7 @@ foreach (['["cacti.devices.get"]', '["abilities:read","cacti.devices.get"]', '[]
 
 $row = null;
 rejects(fn () => mcp_authenticate('Bearer ' . $token), 'INVALID_TOKEN');
+$writes = [];
 
 // mcp_is_exposed
 check(mcp_is_exposed('thold-list-thresholds', 'thold', []) === false, 'plugin_default_hidden');

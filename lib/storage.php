@@ -14,7 +14,9 @@ function mcp_install_schema() : void {
 			token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
 			scopes TEXT NOT NULL,
 			expires_at BIGINT UNSIGNED NOT NULL,
-			revoked TINYINT UNSIGNED NOT NULL DEFAULT 0
+			revoked TINYINT UNSIGNED NOT NULL DEFAULT 0,
+			created_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+			last_used_at BIGINT UNSIGNED NULL
 		) ENGINE=InnoDB',
 		'CREATE TABLE IF NOT EXISTS plugin_mcp_audit (
 			request_id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
@@ -80,7 +82,21 @@ function mcp_authenticate(string $header) : array {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 
+	mcp_touch_token((int) $row['id']);
+
 	return ['token_id' => (int) $row['id'], 'token_kind' => 'pat', 'user_id' => $userId, 'scopes' => ['abilities:read']];
+}
+
+/** Record use of a token at most once a minute. Bookkeeping only: a failure never fails authentication. */
+function mcp_touch_token(int $id) : void {
+	$now = time();
+
+	try {
+		db_execute_prepared('UPDATE plugin_mcp_token SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)',
+			[$now, $id, $now - 60]);
+	} catch (Throwable $error) {
+		// The token was already verified; a missing timestamp is not a reason to refuse it.
+	}
 }
 
 function mcp_audit(array $principal, string $id, string $name, string $outcome) : void {
@@ -159,4 +175,130 @@ function mcp_set_exposure(array $ids, bool $exposed) : void {
 	} finally {
 		mcp_exposure_map(true);
 	}
+}
+
+const MCP_AUDIT_OUTCOMES = ['started', 'succeeded', 'failed', 'denied', 'rejected'];
+
+/**
+ * One page of personal tokens, newest first. Never returns the hash.
+ *
+ * @param array{user_id?: int} $filter
+ * @return array{rows: array, total: int}
+ */
+function mcp_token_list(array $filter, int $page, int $rows) : array {
+	$where  = '';
+	$params = [];
+
+	if (isset($filter['user_id']) && (int) $filter['user_id'] > 0) {
+		$where    = ' WHERE t.user_id = ?';
+		$params[] = (int) $filter['user_id'];
+	}
+
+	return mcp_admin_page('SELECT COUNT(*) FROM plugin_mcp_token AS t' . $where,
+		'SELECT t.id, u.username, t.created_at, t.expires_at, t.last_used_at, t.revoked
+		FROM plugin_mcp_token AS t LEFT JOIN user_auth AS u ON u.id = t.user_id' . $where . ' ORDER BY t.id DESC',
+		$params, $page, $rows);
+}
+
+/**
+ * Create a personal token for a user. The value is returned once; only its hash is stored.
+ *
+ * @throws InvalidArgumentException for a bad user ID or lifetime
+ * @throws RuntimeException when the row cannot be stored
+ */
+function mcp_token_create(int $userId, int $days) : string {
+	if ($userId < 1 || $days < 1 || $days > 365) {
+		throw new InvalidArgumentException('Invalid token owner or lifetime');
+	}
+	$token = 'cmcp_pat_' . bin2hex(random_bytes(32));
+	$now   = time();
+
+	if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
+		[$userId, mcp_token_hash($token), '["abilities:read"]', $now + $days * 86400, $now])) {
+		throw new RuntimeException('MCP token creation failed');
+	}
+
+	return $token;
+}
+
+/** @param list<int> $ids */
+function mcp_token_revoke(array $ids) : void {
+	foreach ($ids as $id) {
+		if (!is_int($id) || $id < 1) {
+			throw new InvalidArgumentException('Invalid token ID');
+		}
+	}
+
+	if ($ids === []) {
+		return;
+	}
+
+	if (!db_execute_prepared('UPDATE plugin_mcp_token SET revoked = 1 WHERE id IN (' . implode(', ', array_fill(0, count($ids), '?')) . ')', array_values($ids))) {
+		throw new RuntimeException('MCP token revocation failed');
+	}
+}
+
+/**
+ * One page of audit rows, newest first.
+ *
+ * @param array{user_id?: int, ability?: string, outcome?: string} $filter empty or -1 values mean no condition
+ * @return array{rows: array, total: int}
+ */
+function mcp_audit_list(array $filter, int $page, int $rows) : array {
+	$conditions = [];
+	$params     = [];
+	$userId     = $filter['user_id'] ?? -1;
+
+	if ($userId !== -1) {
+		if (!is_int($userId) || $userId < 1) {
+			throw new InvalidArgumentException('Invalid user filter');
+		}
+		$conditions[] = 'a.user_id = ?';
+		$params[]     = $userId;
+	}
+	$ability = $filter['ability'] ?? '';
+
+	if ($ability !== '') {
+		if (!is_string($ability) || !AbilitiesRegistry::isValidId($ability)) {
+			throw new InvalidArgumentException('Invalid ability filter');
+		}
+		$conditions[] = 'a.ability = ?';
+		$params[]     = $ability;
+	}
+	$outcome = $filter['outcome'] ?? '';
+
+	if ($outcome !== '') {
+		if (!in_array($outcome, MCP_AUDIT_OUTCOMES, true)) {
+			throw new InvalidArgumentException('Invalid outcome filter');
+		}
+		$conditions[] = 'a.outcome = ?';
+		$params[]     = $outcome;
+	}
+	$where = $conditions ? ' WHERE ' . implode(' AND ', $conditions) : '';
+
+	return mcp_admin_page('SELECT COUNT(*) FROM plugin_mcp_audit AS a' . $where,
+		'SELECT a.request_id, a.token_id, a.user_id, u.username, a.ability, a.outcome, a.started_at, a.finished_at
+		FROM plugin_mcp_audit AS a LEFT JOIN user_auth AS u ON u.id = a.user_id' . $where . ' ORDER BY a.started_at DESC, a.request_id',
+		$params, $page, $rows);
+}
+
+/**
+ * Count and fetch one page. LIMIT and OFFSET are cast to integers and written into the
+ * statement, as Cacti core does, because a bound LIMIT value reaches MySQL as a string.
+ *
+ * @return array{rows: array, total: int}
+ * @throws RuntimeException when the database read fails
+ */
+function mcp_admin_page(string $countSql, string $listSql, array $params, int $page, int $rows) : array {
+	if ($page < 1 || $rows < 1 || $rows > 500) {
+		throw new InvalidArgumentException('Invalid page');
+	}
+	$total = db_fetch_cell_prepared($countSql, $params);
+	$found = db_fetch_assoc_prepared($listSql . ' LIMIT ' . $rows . ' OFFSET ' . (($page - 1) * $rows), $params);
+
+	if ($total === false || $found === false) {
+		throw new RuntimeException('MCP list query failed');
+	}
+
+	return ['rows' => $found, 'total' => (int) $total];
 }

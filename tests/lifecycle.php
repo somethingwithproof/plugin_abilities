@@ -75,12 +75,22 @@ check(!plugin_mcp_check_config(), 'A missing schema must block enable');
 plugin_mcp_install();
 check(plugin_mcp_check_config(), 'Fresh installation must be ready');
 check($realmWrites[0] === ['mcp', 'api.php,mcp.php', 'MCP and Abilities API', false], 'Realm must not be granted automatically');
+check($realmWrites[1] === ['mcp', 'mcp_admin.php', 'MCP Administration', true], 'The admin realm is granted to the installing admin');
+check(in_array(['mcp', 'config_arrays', 'mcp_config_arrays', 'setup.php'], $hooks, true), 'Install must register the config_arrays hook');
+check(in_array(['mcp', 'draw_navigation_text', 'mcp_draw_navigation_text', 'setup.php'], $hooks, true), 'Install must register the draw_navigation_text hook');
 check(in_array(['mcp', 'config_settings', 'mcp_config_settings', 'setup.php'], $hooks, true), 'Install must register the config_settings hook');
 $tabs     = [];
 $settings = [];
 mcp_config_settings();
 check($tabs['mcp'] === 'MCP', 'Settings tab');
 check($settings['mcp']['mcp_public_url']['method'] === 'textbox' && $settings['mcp']['mcp_public_url']['max_length'] === 255, 'Public URL field');
+$menu = [];
+mcp_config_arrays();
+check($menu['Management']['plugins/mcp/mcp_admin.php'] === 'MCP', 'Management menu entry');
+$nav = mcp_draw_navigation_text(['existing:' => ['title' => 'Existing']]);
+check($nav['existing:'] === ['title' => 'Existing'] && $nav['mcp_admin.php:']['title'] === 'MCP Administration'
+	&& $nav['mcp_admin.php:']['mapping'] === 'index.php:' && $nav['mcp_admin.php:']['url'] === 'mcp_admin.php'
+	&& $nav['mcp_admin.php:actions']['mapping'] === 'index.php:,mcp_admin.php:', 'Navigation entries');
 $tables['plugin_mcp_audit']['retained'] = 'audit fixture';
 plugin_mcp_install();
 check($tables['plugin_mcp_audit']['retained'] === 'audit fixture', 'Repeated setup must retain audit data');

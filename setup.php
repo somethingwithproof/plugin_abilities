@@ -10,7 +10,12 @@ function plugin_mcp_install() {
 	mcp_install_schema();
 	api_plugin_register_realm('mcp', 'api.php,mcp.php', __('MCP and Abilities API', 'mcp'), false);
 
+	// The console page needs its own realm; the installing admin gets it.
+	api_plugin_register_realm('mcp', 'mcp_admin.php', __('MCP Administration', 'mcp'), true);
+
 	api_plugin_register_hook('mcp', 'config_settings', 'mcp_config_settings', 'setup.php');
+	api_plugin_register_hook('mcp', 'config_arrays', 'mcp_config_arrays', 'setup.php');
+	api_plugin_register_hook('mcp', 'draw_navigation_text', 'mcp_draw_navigation_text', 'setup.php');
 
 	if (!plugin_mcp_check_config()) {
 		throw new RuntimeException(__('MCP installation is incomplete', 'mcp'));
@@ -31,6 +36,19 @@ function mcp_config_settings() {
 			'size'          => 60
 		]
 	];
+}
+
+function mcp_config_arrays() {
+	global $menu;
+
+	$menu[__('Management')]['plugins/mcp/mcp_admin.php'] = __('MCP', 'mcp');
+}
+
+function mcp_draw_navigation_text($nav) {
+	$nav['mcp_admin.php:']        = ['title' => __('MCP Administration', 'mcp'), 'mapping' => 'index.php:', 'url' => 'mcp_admin.php', 'level' => '1'];
+	$nav['mcp_admin.php:actions'] = ['title' => __('Actions', 'mcp'), 'mapping' => 'index.php:,mcp_admin.php:', 'url' => '', 'level' => '2'];
+
+	return $nav;
 }
 
 function plugin_mcp_uninstall() {

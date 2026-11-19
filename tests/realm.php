@@ -32,7 +32,11 @@ function api_plugin_register_hook($plugin, $hook, $function, $file) {
 
 function api_plugin_register_realm($plugin, $file, $display, $admin = true) {
 	global $registered;
-	$registered = [$plugin, $file];
+
+	// The admin realm is covered by tests/lifecycle.php; this test follows the API realm.
+	if ($file !== 'mcp_admin.php') {
+		$registered = [$plugin, $file];
+	}
 }
 
 function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true, $db_conn = false) {

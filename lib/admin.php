@@ -1,0 +1,79 @@
+<?php
+/* SPDX-FileCopyrightText: 2026 Thomas Vincent
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+
+/* Pure helpers behind the console page, kept apart from Cacti's page functions so they can be tested. */
+
+require_once __DIR__ . '/storage.php';
+
+/** Realm IDs the built-in abilities check; keep in step with lib/providers.php. Plugin abilities declare their own. */
+const MCP_ADMIN_BUILTIN_REALMS = ['cacti-get-system-info' => 15, 'cacti-list-devices' => 3, 'cacti-get-device' => 3];
+
+/** Display name of the realm an ability needs, from Cacti's realm names; blank when the registry cannot say. */
+function mcp_admin_realm_name(array $ability, array $realmNames) : string {
+	$realm = MCP_ADMIN_BUILTIN_REALMS[$ability['id']] ?? null;
+
+	return $realm === null ? '' : (string) ($realmNames[$realm] ?? '');
+}
+
+/**
+ * Rows for the abilities table.
+ *
+ * @param list<array> $all AbilitiesRegistry::all()
+ * @param array<string, bool> $exposureMap mcp_exposure_map()
+ * @param callable(array): string $realmName display name of the realm an ability needs
+ * @return list<array{id: string, label: string, category: string, namespace: string, realm: string, annotations: array, exposed: bool}>
+ */
+function mcp_admin_ability_rows(array $all, array $exposureMap, callable $realmName) : array {
+	$rows = [];
+
+	foreach ($all as $ability) {
+		$rows[] = [
+			'id'          => $ability['id'],
+			'label'       => $ability['label'],
+			'category'    => $ability['category'],
+			'namespace'   => $ability['namespace'],
+			'realm'       => $realmName($ability),
+			'annotations' => $ability['annotations'],
+			'exposed'     => mcp_is_exposed($ability['id'], $ability['namespace'], $exposureMap)
+		];
+	}
+
+	return $rows;
+}
+
+/**
+ * Read a bulk action from a POST. Cacti's actions dropdown posts drp_action; the
+ * rows are checkboxes named chk_<id>. Every ID is validated for the action.
+ *
+ * @return array{action: string, ids: list<string>|list<int>}
+ * @throws InvalidArgumentException for an unknown action
+ */
+function mcp_admin_parse_action(array $post) : array {
+	$action = $post['drp_action'] ?? $post['action'] ?? '';
+
+	if (!is_string($action) || !in_array($action, ['expose', 'hide', 'revoke'], true)) {
+		throw new InvalidArgumentException('Unknown action');
+	}
+	$ids = [];
+
+	foreach (array_keys($post) as $key) {
+		$key = (string) $key;
+
+		if (!str_starts_with($key, 'chk_')) {
+			continue;
+		}
+		$id = substr($key, 4);
+
+		if ($action === 'revoke') {
+			// Digits only, no leading zero, short enough to be a safe integer.
+			if (preg_match('/^[1-9][0-9]{0,14}$/D', $id) === 1) {
+				$ids[] = (int) $id;
+			}
+		} elseif (AbilitiesRegistry::isValidId($id)) {
+			$ids[] = $id;
+		}
+	}
+
+	return ['action' => $action, 'ids' => array_values(array_unique($ids))];
+}
