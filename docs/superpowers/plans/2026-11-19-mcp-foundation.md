@@ -439,6 +439,40 @@ No new files unless a defect is found; a defect goes back to the task that owns 
 - [ ] **Step 3:** Connect Claude Code with the README command and call `cacti-get-system-info`. Record which protocol revision it used (from the access log or a temporary `cacti_log` line that is removed afterwards).
 
 ---
+### Task 16: Self-service token page and guest guard
+
+Runs after Task 13. Views follow Cacti's own permissions; this task adds no new roles or realms.
+
+**Files:**
+- Create: `mcp_tokens.php`, `tests/self_service.php`
+- Modify: `setup.php`, `lib/admin.php`, `lib/storage.php`, `mcp_admin.php`, `tokens.php`, `README.md`, `tests/admin.php`, `tests/lifecycle.php`, `.github/workflows/ci.yml`
+
+**Interfaces:**
+- Consumes: Task 11 (`mcp_token_create(int $userId, int $days, ?int $createdBy)`, `mcp_token_list()`, `mcp_token_revoke()`, `mcp_audit_list()`, `mcp_admin_nonce_issue()` / `mcp_admin_nonce_consume()`, `mcp_admin_may_create_for()`).
+- Produces:
+  - `mcp_token_eligible(array $user, int $guestUserId): bool` in `lib/admin.php`. It returns false when the user is disabled (`enabled !== 'on'`), when `id === $guestUserId` and `$guestUserId > 0`, or when the user lacks the MCP and Abilities API realm. The guest id comes from `read_config_option('guest_user')`.
+  - `mcp_token_create()` throws `InvalidArgumentException` for an ineligible user. The console, `tokens.php`, and `mcp_tokens.php` all go through it. `mcp_authenticate()` also refuses a token whose owner is the guest user, so old tokens stop working if an account becomes the guest.
+  - `mcp_token_revoke(array $ids, ?int $ownerId = null): int` revokes only tokens owned by `$ownerId` when it is given, and returns the number of rows changed. Audit rows are written only for revoked ids.
+  - `mcp_tokens.php` is a console page under the existing `api.php,mcp.php` realm, reached from the user menu as "My MCP Tokens". The menu entry is added through the `config_arrays` hook, and the realm row gains `mcp_tokens.php` in its file list. Its three sections act only on `$_SESSION['sess_user_id']`:
+    - Tokens: list, create (expiry 1 to 365 days, default 90, nonce, shown once), and revoke, all scoped to the owner.
+    - Activity: that user's audit rows, paged.
+    - Available tools: a read-only list of `mcp_registry()->discover($principal)` for that user, with each ability's `id`, `label`, and `description`.
+  - The Management > MCP tokens tab and `mcp_tokens.php` show "Tokens cannot be created for the guest account or disabled users." when the target is ineligible.
+
+- [ ] **Step 1: Write tests.**
+  - `tests/self_service.php`:
+    - `eligible_rules`: covers disabled, guest, missing realm, and a normal user.
+    - `create_refuses_guest`: `mcp_token_create($guestId, 90)` throws.
+    - `revoke_scoped_to_owner`: user A revoking user B's token changes 0 rows and writes no audit row.
+    - `available_tools_follow_principal`: a hidden or unpermitted ability is absent.
+    - `authenticate_refuses_guest_token`.
+  - `tests/admin.php`: the console create path refuses a guest target.
+  - `tests/lifecycle.php`: the realm file list includes `mcp_tokens.php`, and the menu hook is registered.
+- [ ] **Step 2: Run** `php tests/self_service.php`. Expected: fails.
+- [ ] **Step 3: Implement.** Verify `guest_user` and the user-menu array on 1.2.31 and develop before relying on them.
+- [ ] **Step 4: Run** all test scripts and `php -l mcp_tokens.php`. Expected: pass. Then repeat the Task 13 console checks for this page on both instances.
+- [ ] **Step 5: Update the README** with a "My MCP Tokens" section and the guest rule, then commit `feat: add self-service MCP tokens and refuse guest tokens`.
+
 
 ## cacti-mcp tasks
 
