@@ -27,13 +27,18 @@ $token   = 'Bearer cmcp_pat_' . str_repeat('ab', 32);
 $options = ['methods' => ['POST'], 'content_type' => 'application/json', 'max_bytes' => 65536, 'bearer' => true];
 $post    = ['REQUEST_METHOD' => 'POST', 'CONTENT_TYPE' => 'application/json', 'CONTENT_LENGTH' => '10'];
 
-// prepare_strips_identity
-$server  = ['REQUEST_METHOD' => 'POST'];
+// strip_identity
+$_GET    = ['filter' => 'name = "x"'];
 $postVar = ['__csrf_magic' => 'sid:abc,123'];
 $request = ['__csrf_magic' => 'sid:abc,123', 'action' => 'save'];
 $cookie  = ['Cacti' => 'session-id', 'CactiTab' => '1'];
-mcp_prepare_request($server, $postVar, $request, $cookie);
+mcp_strip_identity($postVar, $request, $cookie);
 check($postVar === [] && $request === [] && $cookie === [], 'Identity arrays not emptied');
+check($_GET === ['filter' => 'name = "x"'], '$_GET changed');
+
+// hide_post_method
+$server = ['REQUEST_METHOD' => 'POST'];
+mcp_hide_post_method($server);
 check($server['REQUEST_METHOD'] === 'MCP_POST', 'Method not rewritten');
 check($server['MCP_ORIGINAL_METHOD'] === 'POST', 'Original method not kept');
 
@@ -92,7 +97,7 @@ foreach (['METHOD_NOT_ALLOWED', 'UNSUPPORTED_MEDIA_TYPE', 'REQUEST_TOO_LARGE', '
 /* The include runs in a separate PHP process inside a fixture layout:
  * <root>/include/global.php stands in for Cacti, and the plugin's lib files
  * are copied to <root>/plugins/mcp/lib. */
-function run_fixture(array $server, array $cookie) : array {
+function run_fixture(array $server, array $cookie, array $get = [], array $methods = ['POST']) : array {
 	$root = sys_get_temp_dir() . '/mcp-bootstrap-' . bin2hex(random_bytes(6));
 	mkdir($root . '/include', 0700, true);
 	mkdir($root . '/plugins/mcp/lib', 0700, true);
@@ -112,8 +117,10 @@ function run_fixture(array $server, array $cookie) : array {
 			'cookie'  => $_COOKIE,
 			'post'    => $_POST,
 			'request' => $_REQUEST,
+			'get'     => $_GET,
 		];
 		session_start();
+		$_SESSION['sess_user_id'] = 5;
 		print '<html>Cacti page output</html>';
 		PHP);
 	file_put_contents($root . '/plugins/mcp/endpoint.php', <<<'PHP'
@@ -121,16 +128,19 @@ function run_fixture(array $server, array $cookie) : array {
 		ini_set('session.save_path', __DIR__ . '/../../sessions');
 		$_SERVER = json_decode($argv[1], true) + $_SERVER;
 		$_COOKIE = json_decode($argv[2], true);
-		$_POST = $_REQUEST = ['__csrf_magic' => 'x'];
-		$mcp_bootstrap_options = ['methods' => ['POST'], 'content_type' => 'application/json',
+		$_GET = json_decode($argv[3], true);
+		$_POST = ['__csrf_magic' => 'x'];
+		$_REQUEST = $_GET + $_POST + $_COOKIE;
+		$mcp_bootstrap_options = ['methods' => json_decode($argv[4], true), 'content_type' => 'application/json',
 			'max_bytes' => 65536, 'bearer' => true];
 		$mcp_request = require __DIR__ . '/lib/bootstrap_cacti.php';
 		print json_encode(['request' => $mcp_request, 'during' => $fixture_during ?? null,
 			'method' => $_SERVER['REQUEST_METHOD'], 'session' => session_status(),
-			'poller' => fixture_config_poller()]);
+			'poller' => fixture_config_poller(), 'sessionData' => $_SESSION ?? [], 'get' => $_GET]);
 		PHP);
 	$command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/plugins/mcp/endpoint.php') . ' '
-		. escapeshellarg(json_encode($server)) . ' ' . escapeshellarg(json_encode($cookie));
+		. escapeshellarg(json_encode($server)) . ' ' . escapeshellarg(json_encode($cookie))
+		. ' ' . escapeshellarg(json_encode($get, JSON_FORCE_OBJECT)) . ' ' . escapeshellarg(json_encode($methods));
 	$output  = shell_exec($command);
 
 	$items = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
@@ -155,6 +165,18 @@ check($result['during']['cookie'] === [] && $result['during']['post'] === [] && 
 	'Cacti saw identity input');
 check($result['method'] === 'POST', 'REQUEST_METHOD not restored');
 check($result['session'] === PHP_SESSION_NONE, 'Session left active');
+check($result['sessionData'] === [], '$_SESSION readable after finish');
+
+// get_strips_identity
+$result = run_fixture(['REQUEST_METHOD' => 'GET', 'HTTP_AUTHORIZATION' => $token], ['Cacti' => 'session-id', 'CactiTab' => '1'],
+	['action' => 'save', 'pageSize' => '5'], ['GET', 'POST']);
+check(isset($result['request']), 'GET bootstrap failed: ' . json_encode($result));
+check($result['during']['cookie'] === [] && $result['during']['request'] === [] && $result['during']['post'] === [],
+	'Cacti saw identity input on GET');
+check($result['during']['get'] === ['action' => 'save', 'pageSize' => '5'] && $result['get'] === $result['during']['get'],
+	'$_GET not preserved');
+check($result['during']['method'] === 'GET' && $result['method'] === 'GET', 'GET method changed');
+check($result['session'] === PHP_SESSION_NONE && $result['sessionData'] === [], 'Session left after GET');
 
 // rejected_before_cacti_loads
 $result = run_fixture($post, ['Cacti' => 'session-id']);

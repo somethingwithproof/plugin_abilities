@@ -97,12 +97,15 @@ function mcp_read_body(string $stream, int $maxBytes) : string {
 	return $body;
 }
 
-/** Remove browser identity and hide the POST from Cacti's CSRF guard. */
-function mcp_prepare_request(array &$server, array &$post, array &$request, array &$cookie) : void {
+/** Remove browser identity before Cacti loads. $_GET is left intact for query parameters. */
+function mcp_strip_identity(array &$post, array &$request, array &$cookie) : void {
 	$post    = [];
 	$request = [];
 	$cookie  = [];
+}
 
+/** Hide a POST from Cacti's CSRF guard. mcp_bootstrap_finish() restores the method. */
+function mcp_hide_post_method(array &$server) : void {
 	$server['MCP_ORIGINAL_METHOD'] = $server['REQUEST_METHOD'];
 	$server['REQUEST_METHOD']      = 'MCP_POST';
 }
@@ -115,10 +118,15 @@ function mcp_prepare_request(array &$server, array &$post, array &$request, arra
  * on develop. Hosted MCP and OAuth clients send JSON with a bearer token and
  * cannot send a Cacti CSRF token, and neither supported Cacti version offers
  * a supported way to exempt a web request. Both guards act only when
- * REQUEST_METHOD is exactly 'POST', so for a POST this function empties
- * $_POST, $_REQUEST, and $_COOKIE and renames the method to MCP_POST before
- * global.php loads. The guard then skips the request, and Cacti finds no
- * browser session to attach. mcp_bootstrap_finish() restores the method.
+ * REQUEST_METHOD is exactly 'POST', so for a POST this function renames the
+ * method to MCP_POST before global.php loads, and the guard skips the request.
+ * mcp_bootstrap_finish() restores the method.
+ *
+ * For every method, including GET, this function also empties $_POST,
+ * $_REQUEST, and $_COOKIE before global.php loads, so Cacti finds no browser
+ * session to resume and sees no form input. $_GET is kept for query
+ * parameters. mcp_bootstrap_finish() clears and destroys the fresh session
+ * that global.php starts.
  *
  * This is safe because CSRF protects requests that a browser authenticates
  * with cookies, and these endpoints never accept a cookie or session as
@@ -147,8 +155,10 @@ function mcp_bootstrap_preflight(array $options) : array {
 		mcp_bootstrap_reject($error, $options['methods']);
 	}
 
+	mcp_strip_identity($_POST, $_REQUEST, $_COOKIE);
+
 	if ($method === 'POST') {
-		mcp_prepare_request($_SERVER, $_POST, $_REQUEST, $_COOKIE);
+		mcp_hide_post_method($_SERVER);
 	}
 
 	return ['method' => $method, 'body' => $body, 'authorization' => $authorization];
@@ -160,6 +170,8 @@ function mcp_bootstrap_finish(array $request) : void {
 
 	// global.php starts a session for every web request; this one carries no identity.
 	if (session_status() === PHP_SESSION_ACTIVE) {
+		session_unset();
+		$_SESSION = [];
 		session_destroy();
 	}
 	header_remove('Set-Cookie');
