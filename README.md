@@ -192,24 +192,73 @@ header; a token in the query string or body is not accepted.
 
 Use the MCP endpoint `https://cacti.example.com/cacti/plugins/mcp/mcp.php`, with the
 token in an `Authorization: Bearer` header. Keep the token in an environment
-variable or secret manager, not in a committed file.
+variable or secret manager and reference it from client configuration instead of
+writing its value into a file.
 
 ### Claude Code
+
+Put the endpoint in a project `.mcp.json` that references the token by name.
+Claude Code expands `${VAR}` in `url` and `headers`, so the file holds no secret and
+is safe to commit. Export `CACTI_MCP_TOKEN` in the environment that starts Claude Code.
+
+```json
+{
+  "mcpServers": {
+    "cacti": {
+      "type": "http",
+      "url": "https://cacti.example.com/cacti/plugins/mcp/mcp.php",
+      "headers": {
+        "Authorization": "Bearer ${CACTI_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+You can also add it from the command line:
 
 ```console
 claude mcp add --transport http cacti https://cacti.example.com/cacti/plugins/mcp/mcp.php \
   --header "Authorization: Bearer $CACTI_MCP_TOKEN"
 ```
 
-`--scope` chooses where the entry is stored (`local`, `user`, or `project`; the
-default is `local`). The shell expands `$CACTI_MCP_TOKEN` when you run the command, so
-the token is written into Claude Code's config file for that scope. Keep that file
-out of version control, and prefer `local` or `user` over `project`.
+With double quotes, your shell expands `$CACTI_MCP_TOKEN` first, so the token value
+is written into the config file for the chosen `--scope` (`local`, `user`, or
+`project`; default `local`). Do not use that form with `--scope project`, and keep
+the file out of version control. Prefer the `.mcp.json` reference above. Claude Code
+reads some credential variables (such as `ANTHROPIC_AUTH_TOKEN`) as empty in remote
+`url` and `headers`; `CACTI_MCP_TOKEN` is not one of them. Source:
+[Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
 
-### VS Code
+### GitHub Copilot in VS Code
 
-Add `.vscode/mcp.json`. VS Code prompts for the token on first use and stores it
-securely, so the file holds no secret:
+Use a workspace-root `.mcp.json` (or the user file `~/.copilot/mcp-config.json`).
+These Copilot-native files use a top-level `mcpServers` object and `${NAME}`
+environment-variable references in header values:
+
+```json
+{
+  "mcpServers": {
+    "cacti": {
+      "type": "http",
+      "url": "https://cacti.example.com/cacti/plugins/mcp/mcp.php",
+      "headers": {
+        "Authorization": "Bearer ${CACTI_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Export `CACTI_MCP_TOKEN` in the environment that starts VS Code. Native Copilot
+files do not support `inputs` prompts. Guided setup offers the workspace-root file
+only when the experimental `chat.mcp.workspaceRootConfig.enabled` setting is on. See the
+[VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration).
+
+**Legacy: `.vscode/mcp.json`.** VS Code says new Copilot configurations should not
+use `.vscode/mcp.json` or the profile `mcp.json`; they belong to the deprecated
+Local harness, which will be removed in February 2027. If you still use it, the
+editor-managed format takes a top-level `servers` key and can prompt for the token:
 
 ```json
 {
@@ -232,10 +281,6 @@ securely, so the file holds no secret:
   }
 }
 ```
-
-The `servers` key and `inputs` apply to the editor-managed `.vscode/mcp.json`
-format. See the
-[VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration).
 
 ### Clients that only speak stdio
 
