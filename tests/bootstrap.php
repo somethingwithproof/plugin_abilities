@@ -106,7 +106,7 @@ foreach (['METHOD_NOT_ALLOWED', 'UNSUPPORTED_MEDIA_TYPE', 'REQUEST_TOO_LARGE', '
  * <root>/include/global.php stands in for Cacti, and the plugin's lib files
  * are copied to <root>/plugins/mcp/lib. */
 function run_fixture(array $server, array $cookie, array $get = [], array $methods = ['POST'],
-	string $errorFormat = 'aip', bool $cactiExits = false) : array {
+	string $errorFormat = 'aip', bool $cactiExits = false, int $pollerId = 1) : array {
 	$root = sys_get_temp_dir() . '/mcp-bootstrap-' . bin2hex(random_bytes(6));
 	mkdir($root . '/include', 0700, true);
 	mkdir($root . '/plugins/mcp/lib', 0700, true);
@@ -132,6 +132,11 @@ function run_fixture(array $server, array $cookie, array $get = [], array $metho
 		$_SESSION['sess_user_id'] = 5;
 		print '<html>Cacti page output</html>';
 		PHP);
+
+	if ($pollerId !== 1) {
+		file_put_contents($root . '/include/global.php', str_replace("['poller_id' => 1]", "['poller_id' => " . $pollerId . ']',
+			(string) file_get_contents($root . '/include/global.php')));
+	}
 
 	if ($cactiExits) {
 		/* Like global.php when the database is down: a nested buffer, an HTML
@@ -226,6 +231,19 @@ check($result['_status'] === 503, 'Cacti exit did not give 503: ' . $result['_st
 check(!str_contains($result['_raw'], '<'), 'HTML leaked: ' . $result['_raw']);
 check(($result['jsonrpc'] ?? null) === '2.0' && !array_key_exists('id', $result) && $result['error']['code'] === -32000
 	&& $result['error']['data'] === ['status' => 'UNAVAILABLE', 'reason' => 'CACTI_UNAVAILABLE'], 'Wrong JSON-RPC body: ' . $result['_raw']);
+
+// plugin_unavailable_follows_the_endpoint_format
+foreach (['aip', 'jsonrpc'] as $format) {
+	$result = run_fixture(['HTTP_AUTHORIZATION' => $token] + $post, [], [], ['POST'], $format, false, 2);
+	check($result['_status'] === 503 && !isset($result['request']), 'A remote poller is refused with 503 (' . $format . ')');
+
+	if ($format === 'aip') {
+		check($result['error']['status'] === 'UNAVAILABLE' && $result['error']['details'][0]['reason'] === 'PLUGIN_UNAVAILABLE', 'Wrong AIP body: ' . $result['_raw']);
+	} else {
+		check(($result['jsonrpc'] ?? null) === '2.0' && $result['error']['code'] === -32000
+			&& $result['error']['data'] === ['status' => 'UNAVAILABLE', 'reason' => 'PLUGIN_UNAVAILABLE'], 'Wrong JSON-RPC body: ' . $result['_raw']);
+	}
+}
 
 // success_status_untouched (the CLI reports no status unless one was set)
 $result = run_fixture(['HTTP_AUTHORIZATION' => $token] + $post, []);

@@ -21,7 +21,7 @@ try {
 	$mcp_public = mcp_public_url();
 
 	if ($mcp_public === null) {
-		$mcp_response = mcp_rpc_error(503, -32000, 'The Public Cacti URL is not configured.',
+		$mcp_response = mcp_rpc_error(400, -32000, 'The Public Cacti URL is not configured.',
 			['status' => 'FAILED_PRECONDITION', 'reason' => 'PUBLIC_URL_REQUIRED']);
 	} elseif (!mcp_origin_allowed($_SERVER['HTTP_ORIGIN'] ?? null, $mcp_public)) {
 		$mcp_response = mcp_rpc_error(403, -32000, 'The Origin is not allowed.',
@@ -44,7 +44,9 @@ try {
 	}
 	$mcp_json = $mcp_response['body'] === null ? '' : json_encode($mcp_response['body'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 } catch (Throwable $error) {
-	$mcp_response = mcp_api_error($error);
+	// Every mcp.php body after authentication is JSON-RPC; the detail stays in the log.
+	mcp_log_failure('', 'INTERNAL_ERROR', $error);
+	$mcp_response = mcp_rpc_error(500, -32603, 'Internal error.');
 	$mcp_json     = json_encode($mcp_response['body'], JSON_UNESCAPED_SLASHES);
 }
 

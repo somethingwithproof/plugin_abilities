@@ -23,8 +23,19 @@ function mcp_security_headers() : void {
 	header('Content-Type: application/json; charset=utf-8');
 }
 
-/** Send an AIP-193 error and stop. */
-function mcp_bootstrap_reject(AbilitiesError $error, array $methods = []) : never {
+/** The JSON-RPC error body for an AbilitiesError, in the shape mcp.php uses for its other failures. */
+function mcp_bootstrap_rpc_body(AbilitiesError $error) : array {
+	$message = $error->getMessage() !== '' ? $error->getMessage() : (MCP_ERROR_MESSAGES[$error->reason] ?? 'The request failed.');
+
+	return ['jsonrpc' => '2.0', 'error' => [
+		'code'    => -32000,
+		'message' => $message,
+		'data'    => ['status' => $error->status, 'reason' => $error->reason],
+	]];
+}
+
+/** Send an error, as an AIP-193 body or for $format 'jsonrpc' a JSON-RPC one, and stop. */
+function mcp_bootstrap_reject(AbilitiesError $error, array $methods = [], string $format = 'aip') : never {
 	$status = $error->httpStatus();
 	http_response_code($status);
 
@@ -33,7 +44,7 @@ function mcp_bootstrap_reject(AbilitiesError $error, array $methods = []) : neve
 	} elseif ($status === 405) {
 		header('Allow: ' . implode(', ', $methods));
 	}
-	print json_encode(mcp_error_body($error), JSON_UNESCAPED_SLASHES);
+	print json_encode($format === 'jsonrpc' ? mcp_bootstrap_rpc_body($error) : mcp_error_body($error), JSON_UNESCAPED_SLASHES);
 
 	exit;
 }
@@ -183,15 +194,9 @@ function mcp_bootstrap_buffer(string $buffer, int $phase) : string {
 
 /** The body sent when global.php exits or fails before returning. */
 function mcp_bootstrap_unavailable_body(string $format) : array {
-	if ($format === 'jsonrpc') {
-		return ['jsonrpc' => '2.0', 'error' => [
-			'code'    => -32000,
-			'message' => 'Cacti is not available.',
-			'data'    => ['status' => 'UNAVAILABLE', 'reason' => 'CACTI_UNAVAILABLE'],
-		]];
-	}
+	$error = new AbilitiesError('UNAVAILABLE', 'CACTI_UNAVAILABLE', 'Cacti is not available.', [], 503);
 
-	return mcp_error_body(new AbilitiesError('UNAVAILABLE', 'CACTI_UNAVAILABLE', 'Cacti is not available.', [], 503));
+	return $format === 'jsonrpc' ? mcp_bootstrap_rpc_body($error) : mcp_error_body($error);
 }
 
 /**
@@ -208,9 +213,10 @@ function mcp_bootstrap_shutdown(string $format, int $bufferLevel) : void {
 	while (ob_get_level() > $bufferLevel && ob_end_clean()) {
 	}
 	mcp_bootstrap_end_session();
+	// global.php may have queued headers of its own, such as the Location of its force_https redirect.
+	header_remove();
 	http_response_code(503);
 	mcp_security_headers();
-	header_remove('Set-Cookie');
 	print json_encode(mcp_bootstrap_unavailable_body($format), JSON_UNESCAPED_SLASHES);
 }
 
@@ -224,7 +230,7 @@ function mcp_bootstrap_end_session() : void {
 }
 
 /** Undo the request preparation once global.php has loaded, then require the plugin to be serving. */
-function mcp_bootstrap_finish(array $request) : void {
+function mcp_bootstrap_finish(array $request, string $format = 'aip') : void {
 	global $config;
 
 	mcp_bootstrap_complete(true);
@@ -236,6 +242,6 @@ function mcp_bootstrap_finish(array $request) : void {
 	unset($_SERVER['MCP_ORIGINAL_METHOD']);
 
 	if (!api_plugin_is_enabled('mcp') || (int) ($config['poller_id'] ?? 0) !== 1) {
-		mcp_bootstrap_reject(new AbilitiesError('UNAVAILABLE', 'PLUGIN_UNAVAILABLE'));
+		mcp_bootstrap_reject(new AbilitiesError('UNAVAILABLE', 'PLUGIN_UNAVAILABLE'), [], $format);
 	}
 }
