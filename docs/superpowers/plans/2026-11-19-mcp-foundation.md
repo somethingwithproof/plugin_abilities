@@ -59,6 +59,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `api.php`, `mcp.php` | Thin entry scripts |
 | `tokens.php` | Personal token CLI |
 | `openapi.json` | OpenAPI 3.1 contract for `api.php` |
+| `lib/admin.php`, `mcp_admin.php` | Admin console page: ability exposure, tokens, audit |
 | `tests/*.php` | One plain-PHP test script per lib file, plus `tests/contract.php` |
 
 Every test script follows the existing pattern in `tests/registry.php`: a `check(bool, string)` helper, Cacti functions faked at file scope, exit code non-zero on failure. Each task that adds a test script also adds `php tests/<name>.php` to the "Registry, lifecycle, and native provider tests" step in `.github/workflows/ci.yml`.
@@ -78,7 +79,7 @@ Work on branch `feat/mcp-foundation`, created from `docs/mcp-endpoint-design`.
 
 - [ ] **Step 1: Update `tests/lifecycle.php`** to expect the new function names, table names `plugin_mcp_token` / `plugin_mcp_audit`, and realm `('mcp', 'api.php,mcp.php')`.
 - [ ] **Step 2: Run** `php tests/lifecycle.php`. Expected: fails with "Call to undefined function plugin_mcp_install".
-- [ ] **Step 3: Rename** everything listed above. `INFO`: `name = mcp`, `longname = Cacti MCP`, `homepage = https://github.com/somethingwithproof/plugin_mcp`. Every `__()` domain becomes `'mcp'`; `api_plugin_is_enabled('mcp')`. CI package job: archive prefix `mcp/`, artifact `mcp-plugin`, checks `mcp/images/mcp_logo.png`. README: title "Cacti MCP", logo paths, CI badge URL, and a one-line statement that the plugin hosts the Abilities API. Leave the README's other sections for Task 10.
+- [ ] **Step 3: Rename** everything listed above. `INFO`: `name = mcp`, `longname = Cacti MCP`, `homepage = https://github.com/somethingwithproof/plugin_mcp`. Every `__()` domain becomes `'mcp'`; `api_plugin_is_enabled('mcp')`. CI package job: archive prefix `mcp/`, artifact `mcp-plugin`, checks `mcp/images/mcp_logo.png`. README: title "Cacti MCP", logo paths, CI badge URL, and a one-line statement that the plugin hosts the Abilities API. Leave the README's other sections for Task 12.
 - [ ] **Step 4: Run** `grep -rn -i 'abilities' --include='*.php' --include=INFO --include='*.yml' .`. Expected: matches only for `abilities_register`, `AbilitiesRegistry`, `AbilitiesError`, `abilities_check_schema`, `abilities_validate`, and the Abilities API name in strings. Then run all three test scripts. Expected: pass.
 - [ ] **Step 5: Commit** `refactor: rename the plugin to mcp`.
 
@@ -235,7 +236,7 @@ Work on branch `feat/mcp-foundation`, created from `docs/mcp-endpoint-design`.
 - [ ] **Step 4: Run** `php tests/bootstrap.php`. Expected: pass.
 - [ ] **Step 5: Commit** `feat: bootstrap token-only endpoints past the CSRF guard`.
 
-The live checks on both Cacti versions are in Task 11.
+The live checks on both Cacti versions are in Task 13.
 
 ### Task 7: HTTP Abilities API
 
@@ -340,7 +341,69 @@ The live checks on both Cacti versions are in Task 11.
 - [ ] **Step 4: Run** all test scripts. Expected: pass.
 - [ ] **Step 5: Commit** `feat: serve abilities as MCP tools over Streamable HTTP`.
 
-### Task 10: Documentation
+### Task 10: Ability exposure
+
+**Files:**
+- Modify: `lib/registry.php`, `lib/storage.php`, `lib/providers.php`, `setup.php`, `tests/registry.php`, `tests/lifecycle.php`
+- Create: none
+
+**Interfaces:**
+- Consumes: Tasks 3 and 5.
+- Produces:
+  - Table `plugin_mcp_ability`: `id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY`, `exposed TINYINT UNSIGNED NOT NULL`, and `updated_at BIGINT UNSIGNED NOT NULL`. `mcp_install_schema()` creates it idempotently, `plugin_mcp_check_config()` requires it, and uninstall keeps it.
+  - `AbilitiesRegistry::setExposure(callable $isExposed): void`, where `$isExposed` is `callable(string $id, string $namespace): bool`. `discover()`, `get()`, and `execute()` treat a hidden ability exactly like an unpermitted one: it is absent, `get()` returns null, and `execute()` throws `NOT_FOUND` / `ABILITY_NOT_FOUND`. The registry keeps every ability's namespace (`cacti` for built-ins, the plugin slug otherwise).
+  - `AbilitiesRegistry::all(): array` returns every registered ability's descriptor plus `namespace`, ignoring principal and exposure. Only the admin page uses it.
+  - `mcp_exposure_map(): array<string, bool>` reads all rows once per request. `mcp_is_exposed(string $id, string $namespace, array $map): bool` returns the stored value when present, otherwise `$namespace === 'cacti'`.
+  - `mcp_set_exposure(array $ids, bool $exposed): void` upserts with `db_execute_prepared` (`INSERT ... ON DUPLICATE KEY UPDATE`).
+  - `mcp_registry()` calls `setExposure()` with `mcp_is_exposed()` bound to `mcp_exposure_map()`.
+
+- [ ] **Step 1: Add tests.** In `tests/registry.php`:
+  - `hidden_ability_absent`: a hidden ability is missing from `discover()`, `get()` returns null, and `execute()` throws `ABILITY_NOT_FOUND`.
+  - `exposure_never_grants`: an exposed ability whose `permission` returns false is still absent.
+  - `all_ignores_exposure`: `all()` lists hidden abilities with their namespace.
+
+  Add a pure test of `mcp_is_exposed()`: `plugin_default_hidden` (`mcp_is_exposed('thold-list-thresholds', 'thold', []) === false`), `builtin_default_exposed`, and `stored_value_wins`. In `tests/lifecycle.php`, install creates `plugin_mcp_ability` and check_config requires it.
+- [ ] **Step 2: Run** `php tests/registry.php`. Expected: fails.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** all test scripts. Expected: pass.
+- [ ] **Step 5: Commit** `feat: let admins choose which abilities are exposed`.
+
+### Task 11: Admin console page
+
+**Files:**
+- Create: `mcp_admin.php`, `lib/admin.php`, `tests/admin.php`
+- Modify: `setup.php`, `lib/storage.php`, `tests/lifecycle.php`
+
+**Interfaces:**
+- Consumes: Tasks 4 and 10 (`mcp_token_hash()`, `AbilitiesRegistry::all()`, `mcp_exposure_map()`, `mcp_set_exposure()`).
+- Produces:
+  - A second realm, `api_plugin_register_realm('mcp', 'mcp_admin.php', __('MCP Administration', 'mcp'), true)`, which grants the installing admin.
+  - Install registers hooks `config_arrays` (`mcp_config_arrays`, which adds `$menu[__('Management')]['plugins/mcp/mcp_admin.php'] = __('MCP', 'mcp')`) and `draw_navigation_text` (`mcp_draw_navigation_text`). Follow the pattern in the sibling plugin `~/Developer/github.com/Cacti/plugin_fabric/setup.php` (its `fabric_config_arrays` and `fabric_draw_navigation_text`).
+  - `mcp_admin.php` is a normal Cacti console page: `include('../../include/auth.php')`, `top_header()` / `bottom_footer()`, tabs `abilities` (default), `tokens`, and `audit` selected with `get_filter_request_var('tab', FILTER_VALIDATE_REGEXP, ['options' => ['regexp' => '/^(abilities|tokens|audit)$/']])`. Actions are POSTs with Cacti's CSRF, using `form_actions` and `html_start_box()`. Do not use `mcp_bootstrap()` here.
+  - Storage helpers:
+    - `mcp_token_list(array $filter, int $page, int $rows): array{rows: array, total: int}`, with columns id, username, created_at, expires_at, last_used_at, and revoked.
+    - `mcp_token_create(int $userId, int $days): string`, which generates `'cmcp_pat_' . bin2hex(random_bytes(32))`, stores only the hash, and returns the token once.
+    - `mcp_token_revoke(array $ids): void`.
+    - `mcp_audit_list(array $filter, int $page, int $rows): array{rows: array, total: int}`, filtering on `user_id`, `ability`, and `outcome`, ordered by `started_at DESC`.
+    - Add `created_at` and `last_used_at` columns to `plugin_mcp_token` if Task 4 left them out. `mcp_authenticate()` updates `last_used_at` at most once per minute per token.
+  - `lib/admin.php` holds pure helpers the page renders from, so they can be tested:
+    - `mcp_admin_ability_rows(array $all, array $exposureMap, callable $realmName): array` returns rows of `id`, `label`, `category`, `namespace`, `realm`, `annotations`, and `exposed`.
+    - `mcp_admin_parse_action(array $post): array{action: string, ids: list<string>|list<int>}`. Actions are `expose`, `hide`, and `revoke`. IDs come from Cacti's `chk_` checkbox convention and are validated: ability IDs against the ID regex, token IDs as positive ints.
+  - Abilities tab: a table with an Exposed column and bulk expose and hide actions. Tokens tab: a table, a revoke action, and a create form (user select from enabled `user_auth` rows, expiry days 1 to 365, default 90) that shows the new token once in a copyable read-only field with the text "Copy this token now. It is not shown again." Audit tab: a filter row (user, ability, outcome) and `html_nav_bar` paging. All strings use `__('...', 'mcp')`.
+
+- [ ] **Step 1: Write `tests/admin.php`.**
+  - `ability_rows_show_exposure`: a hidden plugin ability has `exposed === false` and `namespace === 'thold'`.
+  - `parse_action_validates_ids`: `chk_cacti-get-device` and `chk_bad.id` yield only `cacti-get-device`.
+  - `parse_action_rejects_unknown_action`: `action = drop` throws `InvalidArgumentException`.
+  - `token_create_shape`: with fake DB functions, the returned token passes `mcp_token_hash()`, and the stored hash equals `hash('sha256', token)`.
+
+  In `tests/lifecycle.php`, install registers the admin realm and both hooks.
+- [ ] **Step 2: Run** `php tests/admin.php`. Expected: fails.
+- [ ] **Step 3: Implement** `lib/admin.php`, the storage helpers, `setup.php` hooks, and `mcp_admin.php`.
+- [ ] **Step 4: Run** all test scripts and `php -l mcp_admin.php`. Expected: pass.
+- [ ] **Step 5: Commit** `feat: add console pages for abilities, tokens, and audit`.
+
+### Task 12: Documentation
 
 **Files:**
 - Modify: `README.md`, `docs/plan.md`
@@ -350,6 +413,7 @@ The live checks on both Cacti versions are in Task 11.
   - The ability v2 registration example for plugin authors, using `AbilitiesRegistrar` through the `abilities_register` hook.
   - The HTTP API routes, and the token format with its generator command.
   - The Public Cacti URL setting.
+  - The Management > MCP console page: exposing abilities (plugin abilities start hidden), creating and revoking tokens, and reading the audit log.
   - Client setup for Claude Code (`claude mcp add --transport http cacti https://<host>/<path>/plugins/mcp/mcp.php --header "Authorization: Bearer $CACTI_MCP_TOKEN"`) and VS Code (`.vscode/mcp.json` with `type: http`, `url`, and `headers`).
   - The nginx `fastcgi_split_path_info ^(.+\.php)(/.+)$;` and `fastcgi_param PATH_INFO $fastcgi_path_info;` lines needed for `api.php` routes.
   - A short "Security model" list: bearer only, cookies ignored, the CSRF workaround and why it is safe, read-only only, and the audit table.
@@ -359,7 +423,7 @@ The live checks on both Cacti versions are in Task 11.
 - [ ] **Step 3: Check** `grep -n -i 'plugin_abilities\|abilities.php\|cacti\.devices' README.md docs/plan.md`. Expected: no matches.
 - [ ] **Step 4: Commit** `docs: document the MCP endpoint and ability v2 contract`.
 
-### Task 11: Live verification on Cacti 1.2.31 and develop
+### Task 13: Live verification on Cacti 1.2.31 and develop
 
 No new files unless a defect is found; a defect goes back to the task that owns it.
 
@@ -369,6 +433,8 @@ No new files unless a defect is found; a defect goes back to the task that owns 
   - The same request with the Cacti session cookie and no bearer token. Expected: 401.
   - A console form POST without a CSRF token (for example `host.php` with `action=save`). Expected: the CSRF failure page, which proves the guard is still active.
   - `GET api.php/v1/abilities`. Expected: 200, or the documented PATH_INFO 404 on a server not configured for it.
+  - On the Management > MCP page, hide `cacti-get-device`. Expected: it disappears from `tools/list`. Expose it again.
+  - Create a token from the Tokens tab and use it for the next check.
   - The MCP Inspector (`npx @modelcontextprotocol/inspector`), connected over Streamable HTTP with the header. Expected: tools list, and `cacti-list-devices` returns devices.
 - [ ] **Step 3:** Connect Claude Code with the README command and call `cacti-get-system-info`. Record which protocol revision it used (from the access log or a temporary `cacti_log` line that is removed afterwards).
 
@@ -376,9 +442,9 @@ No new files unless a defect is found; a defect goes back to the task that owns 
 
 ## cacti-mcp tasks
 
-Repository `somethingwithproof/cacti-mcp`, branch `fix/mcp-2-sdk` from `develop` for Task 12, then `feat/mcp-plugin-api` for Task 13. Run `uv sync` first; that installs the project's locked dependencies.
+Repository `somethingwithproof/cacti-mcp`, branch `fix/mcp-2-sdk` from `develop` for Task 14, then `feat/mcp-plugin-api` for Task 15. Run `uv sync` first; that installs the project's locked dependencies.
 
-### Task 12: Port to the mcp 2.x SDK
+### Task 14: Port to the mcp 2.x SDK
 
 **Files:**
 - Modify: `src/cacti_mcp/server.py`
@@ -391,7 +457,7 @@ Repository `somethingwithproof/cacti-mcp`, branch `fix/mcp-2-sdk` from `develop`
 - [ ] **Step 3: Run** `uv run pytest && uv run ruff check && uv run ruff format --check`. Expected: 32 passed, lint clean.
 - [ ] **Step 4: Commit** `fix: port the server to the mcp 2.x SDK`. Open the PR to `develop` when the user asks.
 
-### Task 13: Use the plugin's v2 HTTP API
+### Task 15: Use the plugin's v2 HTTP API
 
 **Files:**
 - Modify: `src/cacti_mcp/client.py`, `src/cacti_mcp/server.py`, `tests/test_client.py`, `tests/test_stdio.py`, `tests/test_cli.py`, `README.md`

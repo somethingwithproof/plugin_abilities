@@ -40,6 +40,8 @@ connectors. Those require a remote HTTPS MCP server, normally with OAuth.
    header and for the stdio adapter.
 5. Bring the ability contract close to the WordPress Abilities API so plugin
    authors recognize it: output schema, annotations, category, label.
+5b. Let admins choose which abilities are exposed and manage tokens and
+   the audit log from console pages.
 6. Fix `cacti-mcp` for the mcp 2.x Python SDK and keep it as the optional
    stdio bridge.
 7. Follow Google's API Improvement Proposals wherever the API is
@@ -314,6 +316,33 @@ The plugin acts as the authorization server:
 New tables: `plugin_mcp_oauth_client`, `plugin_mcp_oauth_code`,
 `plugin_mcp_oauth_grant` (access and refresh token hashes). Like the token and
 audit tables, they survive uninstall; uninstall revokes every grant.
+
+### 5a. Admin console pages and ability exposure
+
+Admins choose which abilities are exposed, as in Drupal's MCP Server module,
+and manage the plugin from the Cacti console instead of only the CLI.
+
+- **Exposure.** Each registered ability has an Exposed flag stored in
+  `plugin_mcp_ability`. An ability that is not exposed is absent from
+  discovery and Get and is `NOT_FOUND` on execute, the same as an ability
+  the user may not run. Built-in `cacti-*` abilities start exposed so a fresh
+  install works. Abilities registered by other plugins start hidden until an
+  admin exposes them, so installing a plugin never silently widens what AI
+  clients can reach. Exposure narrows access; it never grants it, so realm
+  checks still apply to exposed abilities.
+- **Pages.** One console page, `mcp_admin.php`, under Management > MCP, with
+  three tabs built from Cacti's own form, filter, and `html_start_box()`
+  helpers, with full CSRF protection:
+  - Abilities: every registered ability with its category, owning plugin,
+    required realm, annotations, and an Exposed toggle, plus bulk
+    expose and hide actions.
+  - Tokens: every personal token with owner, created, expires, last used, and
+    revoked state; create a token for a user (generated server-side and shown
+    once) and revoke tokens.
+  - Audit: recent executions with time, user, token, ability, and outcome,
+    filterable by user, ability, and outcome, paged with Cacti's nav bar.
+- **Permission.** A separate "MCP Administration" realm guards the page. It
+  is distinct from the realm that lets a user call the API.
 
 ### 6. Python adapter (`cacti-mcp`)
 
