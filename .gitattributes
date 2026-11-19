@@ -5,4 +5,4 @@
 /tests export-ignore
 /.gitignore export-ignore
 /.gitattributes export-ignore
-/docs/images export-ignore
+/docs export-ignore
