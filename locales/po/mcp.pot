@@ -221,6 +221,10 @@ msgstr ""
 msgid "MCP tokens are available on the main poller only."
 msgstr ""
 
+#: mcp_tokens.php
+msgid "MCP tokens need a signed-in Cacti user."
+msgstr ""
+
 #: setup.php
 msgid "Management"
 msgstr ""

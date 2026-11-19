@@ -278,6 +278,9 @@ check(str_contains($queries[1][0], 'c.username AS created_by_name') && !str_cont
 $queries = [];
 mcp_token_list(['user_id' => 7], 1, 20);
 check(str_contains($queries[1][0], 'WHERE t.user_id = ?') && $queries[1][1] === [7], 'Token user filter is bound');
+foreach ([0, -1, '7', null] as $badOwner) {
+	throws(fn () => mcp_token_list(['user_id' => $badOwner], 1, 20), InvalidArgumentException::class);
+}
 
 $queries = [];
 $result  = mcp_audit_list(['user_id' => 7, 'ability' => 'cacti-get-device', 'outcome' => 'denied'], 2, 25);

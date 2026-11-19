@@ -261,9 +261,13 @@ function mcp_token_list(array $filter, int $page, int $rows) : array {
 	$where  = '';
 	$params = [];
 
-	if (isset($filter['user_id']) && (int) $filter['user_id'] > 0) {
+	// A supplied owner filter must name a real user; dropping it would list every owner's tokens.
+	if (array_key_exists('user_id', $filter)) {
+		if (!is_int($filter['user_id']) || $filter['user_id'] < 1) {
+			throw new InvalidArgumentException('Invalid user filter');
+		}
 		$where    = ' WHERE t.user_id = ?';
-		$params[] = (int) $filter['user_id'];
+		$params[] = $filter['user_id'];
 	}
 
 	return mcp_admin_page('SELECT COUNT(*) FROM plugin_mcp_token AS t' . $where,

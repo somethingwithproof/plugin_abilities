@@ -253,6 +253,16 @@ function mcp_self_tools_tab() : void {
 $mcp_tab = get_filter_request_var('tab', FILTER_VALIDATE_REGEXP, ['options' => ['regexp' => '/^(tokens|activity|tools)$/']]);
 $mcp_tab = is_string($mcp_tab) && $mcp_tab !== '' ? $mcp_tab : 'tokens';
 
+// Every section is scoped to the signed-in user. With Cacti authentication off there is no such
+// user, so nothing here runs.
+if ((int) read_config_option('auth_method', true) === 0 || mcp_self_user() < 1) {
+	top_header();
+	mcp_self_notice(__('MCP tokens need a signed-in Cacti user.', 'mcp'));
+	bottom_footer();
+
+	exit;
+}
+
 if ((int) $config['poller_id'] !== 1) {
 	top_header();
 	mcp_self_notice(__('MCP tokens are available on the main poller only.', 'mcp'));
