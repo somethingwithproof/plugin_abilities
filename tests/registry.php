@@ -282,6 +282,12 @@ foreach ([['next' => 5, 'items' => []], ['next' => null, 'items' => [['n' => 11]
 	$payload = $bad;
 	rejects(fn () => $rich->execute($principal, 'cacti-rich-out', (object) ['id' => 1], $audit), 'INVALID_RESULT');
 }
+$payload = ['next' => str_repeat('a', 5000), 'items' => []];
+check(strlen($rich->execute($principal, 'cacti-rich-out', (object) ['id' => 1], $audit)['result']['next']) === 5000, 'Result strings have no default length cap');
+$richOutput['properties']['next']['maxLength'] = 10;
+$rich->register('cacti-rich-capped', definition(['output_schema' => $richOutput, 'execute' => function () use (&$payload) { return $payload; }]));
+rejects(fn () => $rich->execute($principal, 'cacti-rich-capped', (object) ['id' => 1], $audit), 'INVALID_RESULT');
+rejects(fn () => abilities_validate(str_repeat('a', 4097), ['type' => 'string']), 'INVALID_ARGUMENTS');
 $payload = ['next' => null, 'items' => []];
 check($rich->execute($principal, 'cacti-rich-out', (object) ['id' => 1], $audit)['result']['items'] === [], 'Empty array output');
 

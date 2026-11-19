@@ -118,7 +118,11 @@ function abilities_check_schema(array $schema) : void {
 	}
 }
 
-function abilities_validate(mixed $value, array $schema) : void {
+/**
+ * $capStrings applies the default 4096-character limit to strings without a declared maxLength.
+ * It is on for arguments; results are bounded by their declared maxLength and the result byte limit.
+ */
+function abilities_validate(mixed $value, array $schema, bool $capStrings = true) : void {
 	$type = $schema['type'];
 
 	if (is_array($type)) {
@@ -151,7 +155,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 			if (!array_key_exists($name, $properties)) {
 				throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 			}
-			abilities_validate($item, $properties[$name]);
+			abilities_validate($item, $properties[$name], $capStrings);
 		}
 	}
 
@@ -161,7 +165,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 		}
 
 		foreach ($value as $item) {
-			abilities_validate($item, $schema['items']);
+			abilities_validate($item, $schema['items'], $capStrings);
 		}
 	}
 
@@ -173,7 +177,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 	if ($type === 'string') {
 		$length = preg_match_all('/./us', $value);
 
-		if ($length === false || $length < ($schema['minLength'] ?? 0) || $length > ($schema['maxLength'] ?? 4096)
+		if ($length === false || $length < ($schema['minLength'] ?? 0) || $length > ($schema['maxLength'] ?? ($capStrings ? 4096 : PHP_INT_MAX))
 			|| (isset($schema['enum']) && !in_array($value, $schema['enum'], true))
 			|| (isset($schema['pattern']) && preg_match('~' . $schema['pattern'] . '~Du', $value) !== 1)) {
 			throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
@@ -368,7 +372,7 @@ class AbilitiesRegistry {
 			if (strlen($json) > 1000000) {
 				throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 			}
-			abilities_validate(json_decode($json, false, 512, JSON_THROW_ON_ERROR), $schema);
+			abilities_validate(json_decode($json, false, 512, JSON_THROW_ON_ERROR), $schema, false);
 		} catch (AbilitiesError | JsonException $error) {
 			throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 		}

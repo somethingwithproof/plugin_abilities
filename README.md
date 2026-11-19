@@ -483,8 +483,9 @@ The rules, all enforced at registration:
   `integer` and `number` (`minimum`, `maximum`), `string` (`minLength`,
   `maxLength`, `enum`, `pattern`), `boolean`, and `array` (which needs `items` and
   `maxItems`). A type may be
-  made nullable as `['string', 'null']`. Strings default to at most 4096
-  characters. At most 256 abilities can register.
+  made nullable as `['string', 'null']`. Argument strings default to at most
+  4096 characters; result strings are limited only by a declared `maxLength`
+  and the result size limit. At most 256 abilities can register.
 - **`permission(int $userId): bool`.** Must return exactly `true` to allow. The
   user ID is the token owner's; never read session state.
 - **`execute(int $userId, stdClass $args): array`.** `$args` is already validated
