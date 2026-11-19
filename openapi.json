@@ -77,6 +77,15 @@
           "401": {
             "$ref": "#/components/responses/Error"
           },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -106,7 +115,16 @@
           "401": {
             "$ref": "#/components/responses/Error"
           },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           },
           "503": {
@@ -155,6 +173,9 @@
             "$ref": "#/components/responses/Error"
           },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
             "$ref": "#/components/responses/Error"
           },
           "413": {
