@@ -35,6 +35,19 @@ class AbilitiesError extends RuntimeException {
 	}
 }
 
+/**
+ * Log a failure the caller only sees as a generic error. Only the ability id, a fixed reason, and the
+ * exception class are written: never the message, arguments, or token. Skipped where Cacti is not loaded.
+ */
+function mcp_log_failure(string $ability, string $reason, ?Throwable $error = null) : void {
+	if (!function_exists('cacti_log')) {
+		return;
+	}
+	$ability = AbilitiesRegistry::isValidId($ability) ? $ability : '(none)';
+
+	cacti_log('MCP: ability ' . $ability . ' failed: ' . $reason . ($error !== null ? ' (' . $error::class . ')' : ''), false, 'MCP');
+}
+
 /** A deliberately small schema dialect. Unsupported constraints fail closed. */
 function abilities_check_schema(array $schema) : void {
 	$types = [
@@ -289,7 +302,8 @@ class AbilitiesRegistry {
 		try {
 			$audit($requestId, $name, $outcome);
 		} catch (Throwable $error) {
-			// The refusal itself is the outcome; the audit failure is not reported to the caller.
+			// The refusal itself is the outcome; the audit failure is not reported to the caller, only logged.
+			mcp_log_failure($name, 'AUDIT_REFUSAL_FAILED', $error);
 		}
 	}
 
@@ -306,9 +320,7 @@ class AbilitiesRegistry {
 				throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 			}
 			abilities_validate(json_decode($json, false, 512, JSON_THROW_ON_ERROR), $schema);
-		} catch (AbilitiesError $error) {
-			throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
-		} catch (JsonException $error) {
+		} catch (AbilitiesError | JsonException $error) {
 			throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 		}
 	}

@@ -4,6 +4,13 @@
 
 require_once __DIR__ . '/../lib/registry.php';
 
+$logs = [];
+
+function cacti_log($message, $output = false, $facility = '') {
+	global $logs;
+	$logs[] = [$message, $output, $facility];
+}
+
 function check(bool $ok, string $message) : void {
 	if (!$ok) {
 		throw new RuntimeException($message);
@@ -131,7 +138,9 @@ $trail = [];
 rejects(fn () => $registry->execute($principal, str_repeat('x', 300), (object) [], $audit), 'ABILITY_NOT_FOUND');
 check($trail[0][2] === 'denied' && strlen($trail[0][1]) <= 64, 'Denied audit name is bounded');
 // A failing audit write must not turn a denial into a different error.
-rejects(fn () => $registry->execute($principal, 'cacti-missing-thing', (object) [], function () { throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE'); }), 'ABILITY_NOT_FOUND');
+$logs = [];
+rejects(fn () => $registry->execute($principal, 'cacti-missing-thing', (object) [], function () { throw new RuntimeException('db password in message'); }), 'ABILITY_NOT_FOUND');
+check($logs === [['MCP: ability cacti-missing-thing failed: AUDIT_REFUSAL_FAILED (RuntimeException)', false, 'MCP']], 'A failed refusal audit is logged by class only');
 
 foreach ([(object) [], (object) ['id' => '2'], (object) ['id' => true], (object) ['id' => 0], (object) ['id' => 101], (object) ['id' => 2, 'extra' => 1]] as $args) {
 	rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', $args, $audit), 'INVALID_ARGUMENTS');

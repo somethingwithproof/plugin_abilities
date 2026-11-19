@@ -300,7 +300,7 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 
 	// Without the Users/Groups permission an admin can only create a token for themselves.
 	// Forced: a console session caches options, and a stale guest id would offer the guest account.
-	$guestId = (int) read_config_option('guest_user', true);
+	$guestId = mcp_guest_user_id(true);
 
 	if (mcp_admin_has_user_admin()) {
 		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? AND id <> ? ORDER BY username', ['on', $guestId]);

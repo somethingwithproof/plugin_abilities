@@ -61,6 +61,23 @@ function mcp_token_hash(string $token) : ?string {
 	return preg_match('/^cmcp_pat_[a-f0-9]{64}$/D', $token) === 1 ? hash('sha256', $token) : null;
 }
 
+/**
+ * The guest account's user ID, or 0 when none is configured. The setting holds a username or an ID
+ * (get_guest_account() matches both, and no 1.2.x upgrade step converts old values), so it is resolved
+ * the same way. get_guest_account() reads the cached option, so $fresh is for session-bearing console
+ * paths, where a stale cache would still treat an account made the guest after sign-in as ordinary.
+ */
+function mcp_guest_user_id(bool $fresh = false) : int {
+	$setting = read_config_option('guest_user', $fresh);
+
+	if ($setting === '' || $setting === null || $setting === false || $setting === 0 || $setting === '0') {
+		return 0;
+	}
+	$id = db_fetch_cell_prepared('SELECT id FROM user_auth WHERE username = ? OR id = ?', [$setting, $setting]);
+
+	return empty($id) ? 0 : (int) $id;
+}
+
 function mcp_authenticate(string $header) : array {
 	if (!preg_match('/^Bearer (cmcp_pat_[a-f0-9]{64})$/D', $header, $matches)) {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
@@ -78,8 +95,7 @@ function mcp_authenticate(string $header) : array {
 	$userId = (int) $row['user_id'];
 
 	// A guest account never holds a personal token; one minted before the account became the guest stops working.
-	// Cacti caches the option, so this adds no query.
-	$guestId = (int) read_config_option('guest_user');
+	$guestId = mcp_guest_user_id();
 
 	if ($guestId > 0 && $userId === $guestId) {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
@@ -133,6 +149,8 @@ function mcp_audit(array $principal, string $id, string $name, string $outcome) 
 	}
 
 	if (!$ok) {
+		mcp_log_failure($name, 'AUDIT_UNAVAILABLE');
+
 		throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE');
 	}
 }
@@ -253,7 +271,7 @@ function mcp_token_assert_eligible(int $userId) : void {
 
 	// Forced read: a console session caches options, so an account made the guest after sign-in
 	// would otherwise still pass. The endpoints have no session and keep the cached read.
-	if (!is_array($user) || !mcp_token_eligible($user, (int) read_config_option('guest_user', true))) {
+	if (!is_array($user) || !mcp_token_eligible($user, mcp_guest_user_id(true))) {
 		throw new InvalidArgumentException('User is not eligible for a token');
 	}
 }

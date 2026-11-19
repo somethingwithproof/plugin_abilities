@@ -12,6 +12,13 @@ function check(bool $ok, string $message) : void {
 	}
 }
 
+$logs = [];
+
+function cacti_log($message, $output = false, $facility = '') {
+	global $logs;
+	$logs[] = [$message, $output, $facility];
+}
+
 function fixture_registry(bool $permitted = true) : AbilitiesRegistry {
 	$registry = new AbilitiesRegistry();
 	$registry->registerCategory('fixtures', 'Fixtures');
@@ -132,8 +139,21 @@ check($result['content'] === [['type' => 'text', 'text' => '{"id":5}']], 'text c
 check(!isset($result['isError']) && $events === ['started', 'succeeded'], 'success is audited');
 $r = modern('tools/call', ['name' => 'fixture-get-thing', 'arguments' => ['id' => 6]], ['mcp-name' => 'fixture-get-thing']);
 check(plain($r['body'])['result']['resultType'] === 'complete', 'modern call resultType');
-$r = legacy('tools/call', ['name' => 'fixture-get-thing', 'arguments' => 'bogus']);
-check(plain($r['body'])['result']['structuredContent'] === ['id' => 1], 'non-object arguments are {}');
+// A malformed arguments value is refused, not replaced with {}: that would run an unfiltered call.
+foreach (['bogus', '{"id":5}', [1, 2], 7, true] as $bad) {
+	$events = [];
+	$r      = rpc(['jsonrpc' => '2.0', 'id' => 4, 'method' => 'tools/call', 'params' => ['name' => 'fixture-get-thing', 'arguments' => $bad]],
+		[], 'POST', true, $events);
+	$result = plain($r['body'])['result'];
+	check($r['status'] === 200 && $result['isError'] === true && $result['structuredContent']['error']['status'] === 'INVALID_ARGUMENT'
+		&& $result['structuredContent']['error']['details'][0]['reason'] === 'INVALID_ARGUMENTS'
+		&& $result['structuredContent']['error']['details'][1]['fieldViolations'][0]['field'] === 'arguments'
+		&& $events === [], 'non-object arguments are an INVALID_ARGUMENTS tool error');
+}
+$r = legacy('tools/call', ['name' => 'fixture-get-thing', 'arguments' => (object) []]);
+check(plain($r['body'])['result']['structuredContent'] === ['id' => 1], 'empty object arguments run');
+$r = rpc('{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fixture-get-thing","arguments":null}}');
+check(plain($r['body'])['result']['structuredContent'] === ['id' => 1], 'null arguments mean none');
 $r = legacy('tools/call', ['name' => 'fixture-empty-thing']);
 check(json_encode($r['body']['result']['structuredContent']) === '{}', 'empty result is an object');
 
@@ -147,9 +167,12 @@ $r = legacy('tools/call', ['name' => 'no-such-tool']);
 check($r['status'] === 200 && plain($r['body'])['result']['isError'] === true && !isset($r['body']['error']), 'unknown tool is a tool error');
 $r = legacy('tools/call', ['name' => 'fixture-get-thing', 'arguments' => ['id' => 999]]);
 check(plain($r['body'])['result']['structuredContent']['error']['status'] === 'INVALID_ARGUMENT', 'invalid arguments');
-$r = legacy('tools/call', ['name' => 'fixture-broken-thing']);
+$logs = [];
+$r    = legacy('tools/call', ['name' => 'fixture-broken-thing', 'arguments' => (object) ['id' => 5]]);
 check(plain($r['body'])['result']['structuredContent']['error']['status'] === 'INTERNAL'
 	&& !str_contains(json_encode($r['body']), 'secret detail'), 'unexpected failure does not leak');
+check($logs === [['MCP: ability fixture-broken-thing failed: INTERNAL_ERROR (RuntimeException)', false, 'MCP']]
+	&& !str_contains(json_encode($logs), 'secret detail'), 'unexpected failure is logged without its message or arguments');
 $denied = rpc(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => ['name' => 'fixture-get-thing']], [], 'POST', false);
 check(plain($denied['body'])['result']['isError'] === true, 'unpermitted ability cannot be called');
 $deniedError = plain($denied['body'])['result']['structuredContent']['error'];
@@ -217,6 +240,7 @@ $info      = ['name' => 'cacti-mcp', 'version' => '0.1.0'];
 $r = mcp_rpc_handle('POST', [], '{"jsonrpc":"2.0","id":9,"method":"tools/list"}', $throwing, $principal, $audit, $info);
 check($r['status'] === 200 && $r['body']['error']['code'] === -32603 && $r['body']['id'] === 9
 	&& !str_contains(json_encode($r['body']), 'secret'), 'legacy throwing permission callback');
+check($logs[1] === ['MCP: ability (none) failed: DISCOVERY_FAILED (RuntimeException)', false, 'MCP'], 'discovery failure is logged by class');
 $r = mcp_rpc_handle('POST', ['mcp-protocol-version' => '2026-07-28', 'mcp-method' => 'tools/list'],
 	json_encode(['jsonrpc' => '2.0', 'id' => 9, 'method' => 'tools/list', 'params' => ['_meta' => MODERN_META]]), $throwing, $principal, $audit, $info);
 check($r['status'] === 500 && $r['body']['error']['code'] === -32603 && $r['body']['id'] === 9

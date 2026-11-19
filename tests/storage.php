@@ -25,6 +25,13 @@ function db_fetch_assoc_prepared($sql, $params = []) {
 	return $exposureRows;
 }
 
+$logs = [];
+
+function cacti_log($message, $output = false, $facility = '') {
+	global $logs;
+	$logs[] = [$message, $output, $facility];
+}
+
 function check(bool $ok, string $message) : void {
 	if (!$ok) {
 		throw new RuntimeException($message);
@@ -146,6 +153,13 @@ try {
 } catch (RuntimeException $error) {
 	check($error->getMessage() === 'MCP exposure update failed', 'Write failure surfaces');
 }
+$failWrite = false;
+
+// an unwritable audit log refuses the call and leaves a trace for the admin
+$failWrite = true;
+$logs      = [];
+rejects(fn () => mcp_audit(['token_id' => 1, 'user_id' => 7], str_repeat('a', 32), 'cacti-list-devices', 'started'), 'AUDIT_UNAVAILABLE');
+check($logs === [['MCP: ability cacti-list-devices failed: AUDIT_UNAVAILABLE', false, 'MCP']], 'AUDIT_UNAVAILABLE is logged with the ability and reason only');
 $failWrite = false;
 
 // a failed read hides everything rather than falling back to defaults

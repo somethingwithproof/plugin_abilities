@@ -54,6 +54,20 @@ function mcp_error_body(AbilitiesError $e) : array {
 	]];
 }
 
+/** Make empty "properties" lists encode as JSON objects. */
+function mcp_schema_json(array $schema) : array {
+	if (isset($schema['properties']) && is_array($schema['properties'])) {
+		$properties = array_map('mcp_schema_json', $schema['properties']);
+		$schema['properties'] = $properties === [] ? new stdClass() : $properties;
+	}
+
+	if (isset($schema['items']) && is_array($schema['items'])) {
+		$schema['items'] = mcp_schema_json($schema['items']);
+	}
+
+	return $schema;
+}
+
 /** Read pageSize and pageToken. The token binds the offset to the query fingerprint. @return array{size: int, offset: int} */
 function mcp_page(stdClass $args, string $fingerprint, int $default = MCP_PAGE_SIZE_DEFAULT, int $max = MCP_PAGE_SIZE_MAX) : array {
 	$size = $default;

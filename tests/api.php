@@ -12,6 +12,13 @@ function check(bool $ok, string $message) : void {
 	}
 }
 
+$logs = [];
+
+function cacti_log($message, $output = false, $facility = '') {
+	global $logs;
+	$logs[] = [$message, $output, $facility];
+}
+
 function fixture_registry(bool $permitted = true) : AbilitiesRegistry {
 	$registry = new AbilitiesRegistry();
 	$registry->registerCategory('fixtures', 'Fixtures');
@@ -127,6 +134,10 @@ $registry->register('fixture-broken-thing', ['label' => 'Broken', 'description' 
 $response = mcp_api_handle('POST', '/v1/abilities/fixture-broken-thing:execute', [], '{"arguments":{}}', $registry,
 	['token_id' => 1, 'token_kind' => 'pat', 'user_id' => 7, 'scopes' => ['abilities:read']], fn () => null);
 check($response['status'] === 500 && !str_contains(json_encode($response['body']), 'secret'), 'Internal error leaked');
+check($logs === [['MCP: ability fixture-broken-thing failed: INTERNAL_ERROR (RuntimeException)', false, 'MCP']], 'Internal error is logged by class only');
+$logs = [];
+call('GET', '/v1/abilities/no-such-thing');
+check($logs === [], 'Expected errors are not logged');
 
 // unauthenticated_adds_challenge
 $response = mcp_api_error(new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN'));

@@ -57,6 +57,14 @@ function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true,
 		return 9;
 	}
 
+	// The guest setting holds a user ID or a username.
+	if (str_starts_with($sql, 'SELECT id FROM user_auth WHERE username = ?')) {
+		return match ($params[0]) {
+			3, '3', 'guestuser' => 3,
+			default => false,
+		};
+	}
+
 	if (str_starts_with($sql, 'SELECT id FROM plugin_mcp_token WHERE token_hash')) {
 		foreach ($tokens as $row) {
 			if ($row['token_hash'] === $params[0]) {
@@ -176,6 +184,22 @@ try {
 }
 $config['guest_user'] = 0;
 check(mcp_authenticate('Bearer cmcp_pat_' . str_repeat('a', 64))['user_id'] === 3, 'With no guest configured the same token is fine');
+// An install that still stores the guest as a username is guarded the same way.
+$config['guest_user'] = 'guestuser';
+
+try {
+	mcp_authenticate('Bearer cmcp_pat_' . str_repeat('a', 64));
+
+	throw new LogicException('A guest configured by username must be refused');
+} catch (AbilitiesError $error) {
+	check($error->reason === 'INVALID_TOKEN', 'Guest token is refused when the setting is a username');
+}
+check(mcp_guest_user_id() === 3 && mcp_guest_user_id(true) === 3, 'A guest username resolves to its ID');
+throws(fn () => mcp_token_create(3, 30), InvalidArgumentException::class);
+$config['guest_user'] = '';
+check(mcp_guest_user_id() === 0, 'An empty setting is no guest');
+$config['guest_user'] = 'nosuchuser';
+check(mcp_guest_user_id() === 0, 'A setting that matches no user is no guest');
 $config['guest_user'] = 3;
 $optionReads = [];
 mcp_authenticate('Bearer ' . $token);

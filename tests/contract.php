@@ -33,6 +33,9 @@ $get = mcp_api_handle('GET', '/v1/abilities/fixture-get-thing', [], '', $registr
 $properties = array_keys($spec['components']['schemas']['Ability']['properties']);
 check($properties === array_keys($get['body']), 'Ability schema properties differ from emitted keys');
 
+// An empty properties list must serialize as {} or JSON Schema validators reject the schema.
+check(str_contains(json_encode($get['body']), '"inputSchema":{"type":"object","properties":{},'), 'Empty properties encode as an object');
+
 $list = mcp_api_handle('GET', '/v1/abilities', [], '', $registry, $principal, $audit);
 check(array_keys($spec['components']['schemas']['ListAbilitiesResponse']['properties']) === array_keys($list['body']), 'List keys');
 

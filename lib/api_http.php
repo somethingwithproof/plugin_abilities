@@ -9,9 +9,12 @@ require_once __DIR__ . '/registry.php';
 require_once __DIR__ . '/aip.php';
 
 /** The AIP-193 response for an error, with the headers the status calls for. @return array{status: int, headers: array<string, string>, body: array} */
-function mcp_api_error(Throwable $error) : array {
+function mcp_api_error(Throwable $error, string $ability = '') : array {
 	if (!$error instanceof AbilitiesError) {
+		mcp_log_failure($ability, 'INTERNAL_ERROR', $error);
 		$error = new AbilitiesError('INTERNAL', 'INTERNAL_ERROR');
+	} elseif ($error->status === 'INTERNAL') {
+		mcp_log_failure($ability, $error->reason, $error);
 	}
 	$headers = $error->httpStatus() === 401 ? ['WWW-Authenticate' => 'Bearer'] : [];
 
@@ -25,8 +28,8 @@ function mcp_api_ability(array $descriptor) : array {
 		'displayName'  => $descriptor['label'],
 		'description'  => $descriptor['description'],
 		'category'     => $descriptor['category'],
-		'inputSchema'  => $descriptor['inputSchema'],
-		'outputSchema' => $descriptor['outputSchema'],
+		'inputSchema'  => mcp_schema_json($descriptor['inputSchema']),
+		'outputSchema' => mcp_schema_json($descriptor['outputSchema']),
 		'annotations'  => $descriptor['annotations'],
 	];
 }
@@ -116,10 +119,13 @@ function mcp_api_execute(string $id, string $body, AbilitiesRegistry $registry, 
  */
 function mcp_api_handle(string $method, string $pathInfo, array $query, string $body,
 	AbilitiesRegistry $registry, array $principal, callable $audit) : array {
+	$ability = '';
+
 	try {
 		if ($method === 'GET' && $pathInfo === '/v1/abilities') {
 			$result = mcp_api_list($query, $registry, $principal);
 		} elseif ($method === 'GET' && preg_match('#^/v1/abilities/([^/:]+)$#D', $pathInfo, $match)) {
+			$ability    = $match[1];
 			$descriptor = $registry->get($principal, $match[1]);
 
 			if ($descriptor === null) {
@@ -127,13 +133,14 @@ function mcp_api_handle(string $method, string $pathInfo, array $query, string $
 			}
 			$result = mcp_api_ability($descriptor);
 		} elseif ($method === 'POST' && preg_match('#^/v1/abilities/([^/:]+):execute$#D', $pathInfo, $match)) {
-			$result = mcp_api_execute($match[1], $body, $registry, $principal, $audit);
+			$ability = $match[1];
+			$result  = mcp_api_execute($match[1], $body, $registry, $principal, $audit);
 		} else {
 			throw new AbilitiesError('NOT_FOUND', 'UNKNOWN_PATH', "No route matches '" . substr($pathInfo, 0, 200) . "'.");
 		}
 
 		return ['status' => 200, 'headers' => [], 'body' => $result];
 	} catch (Throwable $error) {
-		return mcp_api_error($error);
+		return mcp_api_error($error, $ability);
 	}
 }

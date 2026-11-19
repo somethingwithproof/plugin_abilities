@@ -44,20 +44,6 @@ function mcp_rpc_error(int $status, int $code, string $message, mixed $data = nu
 	return ['status' => $status, 'headers' => [], 'body' => $body + ['error' => $error]];
 }
 
-/** Make empty "properties" lists encode as JSON objects. */
-function mcp_schema_json(array $schema) : array {
-	if (isset($schema['properties']) && is_array($schema['properties'])) {
-		$properties = array_map('mcp_schema_json', $schema['properties']);
-		$schema['properties'] = $properties === [] ? new stdClass() : $properties;
-	}
-
-	if (isset($schema['items']) && is_array($schema['items'])) {
-		$schema['items'] = mcp_schema_json($schema['items']);
-	}
-
-	return $schema;
-}
-
 /** The MCP tool for a registry descriptor. */
 function mcp_rpc_tool(array $descriptor) : array {
 	return [
@@ -72,10 +58,13 @@ function mcp_rpc_tool(array $descriptor) : array {
 
 /** Run an ability. An AbilitiesError is a tool result with isError, never a protocol error. */
 function mcp_rpc_call(stdClass $params, AbilitiesRegistry $registry, array $principal, callable $audit) : array {
-	$arguments = $params->arguments ?? null;
+	$arguments = $params->arguments ?? new stdClass();
 
+	// Dropping a malformed value would run the ability unfiltered, so a double-encoded string is refused like api.php refuses it.
+	// A missing or null value means no arguments.
 	if (!$arguments instanceof stdClass) {
-		$arguments = new stdClass();
+		return mcp_rpc_tool_error(new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS', '',
+			[['field' => 'arguments', 'description' => 'Must be a JSON object.']]));
 	}
 
 	try {
@@ -92,13 +81,22 @@ function mcp_rpc_call(stdClass $params, AbilitiesRegistry $registry, array $prin
 	} catch (Throwable $error) {
 		// Only the sanctioned error text leaves the server; anything unexpected is a generic failure.
 		if (!$error instanceof AbilitiesError) {
+			mcp_log_failure((string) $params->name, 'INTERNAL_ERROR', $error);
 			$error = new AbilitiesError('INTERNAL', 'INTERNAL_ERROR');
+		} elseif ($error->status === 'INTERNAL') {
+			mcp_log_failure((string) $params->name, $error->reason, $error);
 		}
-		$body = mcp_error_body($error);
 
-		return ['isError' => true, 'content' => [['type' => 'text', 'text' => $body['error']['message']]],
-			'structuredContent' => $body];
+		return mcp_rpc_tool_error($error);
 	}
+}
+
+/** A tool result that reports an error to the model. */
+function mcp_rpc_tool_error(AbilitiesError $error) : array {
+	$body = mcp_error_body($error);
+
+	return ['isError' => true, 'content' => [['type' => 'text', 'text' => $body['error']['message']]],
+		'structuredContent' => $body];
 }
 
 /** Decode the mcp-name header, which carries non-ASCII or unsafe values as =?base64?...?=. */
@@ -212,6 +210,7 @@ function mcp_rpc_handle(string $httpMethod, array $headers, string $body, Abilit
 		}
 	} catch (Throwable $error) {
 		// A plugin permission callback can throw during discovery; keep the detail out of the response.
+		mcp_log_failure('', 'DISCOVERY_FAILED', $error);
 		return mcp_rpc_error($modern ? 500 : 200, -32603, 'Internal error.', null, $id);
 	}
 

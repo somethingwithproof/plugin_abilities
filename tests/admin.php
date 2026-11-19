@@ -77,7 +77,11 @@ function db_fetch_row_prepared($sql, $params = [], $log = true, $db_conn = false
 }
 
 function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true, $db_conn = false) {
-	global $queries, $total, $tokens;
+	global $queries, $total, $tokens, $guestId;
+
+	if (str_starts_with($sql, 'SELECT id FROM user_auth WHERE username = ?')) {
+		return $params[0] === $guestId ? $guestId : false;
+	}
 
 	if (str_starts_with($sql, 'SELECT id FROM plugin_mcp_token WHERE token_hash')) {
 		foreach ($tokens as $row) {
