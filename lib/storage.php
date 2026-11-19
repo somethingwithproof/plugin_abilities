@@ -113,9 +113,16 @@ function mcp_exposure_map(bool $refresh = false) : array {
 	static $map = null;
 
 	if ($map === null || $refresh) {
-		$map = [];
+		$map  = [];
+		$rows = db_fetch_assoc_prepared('SELECT id, exposed FROM plugin_mcp_ability', []);
 
-		foreach (db_fetch_assoc_prepared('SELECT id, exposed FROM plugin_mcp_ability', []) ?: [] as $row) {
+		// A failed read must not fall back to defaults, which could re-expose abilities an admin hid.
+		// '*' is not a valid ability ID, so it can only come from this sentinel.
+		if ($rows === false) {
+			return $map = ['*' => false];
+		}
+
+		foreach ($rows as $row) {
 			$map[(string) $row['id']] = (int) $row['exposed'] === 1;
 		}
 	}
@@ -125,6 +132,10 @@ function mcp_exposure_map(bool $refresh = false) : array {
 
 /** A stored flag wins; otherwise built-in (cacti) abilities are exposed and plugin abilities are hidden. */
 function mcp_is_exposed(string $id, string $namespace, array $map) : bool {
+	if (($map['*'] ?? true) === false) {
+		return false;
+	}
+
 	return $map[$id] ?? $namespace === 'cacti';
 }
 

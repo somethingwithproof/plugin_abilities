@@ -199,6 +199,13 @@ function mcp_dispatch_ability_hooks(AbilitiesRegistry $registry) : void {
 			continue;
 		}
 
+		// The cacti namespace belongs to the built-ins, which are exposed by default.
+		if ($name === 'cacti') {
+			cacti_log('MCP: ability registration skipped for plugin cacti: reserved namespace', false, 'MCP');
+
+			continue;
+		}
+
 		if (str_contains($hook['file'], '..') || str_contains($name, '..')) {
 			cacti_log('MCP: ability registration skipped for plugin ' . $name . ': invalid hook file', false, 'MCP');
 

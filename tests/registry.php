@@ -92,13 +92,25 @@ rejects(fn () => $registry->execute($principal, 'cacti-fixture-read', (object) [
 $allowed = true;
 
 // unified_not_found: unknown, unpermitted, and hidden abilities are the same error
-foreach ([['cacti-missing-thing', $principal], ['cacti-fixture-read', ['user_id' => 8] + $principal]] as [$id, $who]) {
+$notFound = [];
+$hide     = new AbilitiesRegistry();
+$hide->registerCategory('fixtures', 'Fixtures');
+$hide->register('cacti-fixture-read', definition());
+$hide->setExposure(fn (string $id, string $namespace) => false);
+foreach ([[$registry, 'cacti-missing-thing', $principal], [$registry, 'cacti-fixture-read', ['user_id' => 8] + $principal],
+	[$hide, 'cacti-fixture-read', $principal]] as [$target, $id, $who]) {
 	try {
-		$registry->execute($who, $id, (object) ['id' => 2], $audit);
+		$target->execute($who, $id, (object) ['id' => 2], $audit);
 	} catch (AbilitiesError $error) {
 		check($error->status === 'NOT_FOUND' && $error->reason === 'ABILITY_NOT_FOUND' && $error->httpStatus() === 404 && $error->getMessage() === '', 'Unified not found');
+		$notFound[] = [$error->status, $error->reason, $error->getMessage(), $error->violations, $error->httpStatus()];
+
+		continue;
 	}
+
+	throw new RuntimeException('Expected not found for ' . $id);
 }
+check(count($notFound) === 3 && $notFound[0] === $notFound[1] && $notFound[0] === $notFound[2], 'Unknown, unpermitted, and hidden errors are identical');
 
 // audit_sequences
 $trail = [];

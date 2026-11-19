@@ -209,6 +209,12 @@ check($registry->get($principal, 'fixture-half-done') === null, 'Partial registr
 check(count(array_filter($logs, fn ($log) => str_contains($log[0], 'registration failed'))) === 1, 'Failure logged once');
 check($logs[0] === ['MCP: ability registration failed for plugin fixture', false, 'MCP'], 'Failure log text');
 
+// reserved_namespace: a plugin named cacti cannot register as a built-in
+$hooks = [['name' => 'cacti', 'file' => 'setup.php', 'function' => 'fixture_register']];
+$logs  = [];
+check(count(mcp_registry()->all()) === 3 && !in_array('fixture-ok-one', array_column(mcp_registry()->all(), 'id'), true), 'Plugin named cacti is skipped');
+check($logs[0] === ['MCP: ability registration skipped for plugin cacti: reserved namespace', false, 'MCP'], 'Reserved namespace logged');
+
 // a later healthy plugin still registers after a failing one
 $hooks    = [$hooks[0], ['name' => 'fixture', 'file' => 'setup.php', 'function' => 'fixture_register']];
 $registry = mcp_registry();

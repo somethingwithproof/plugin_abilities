@@ -147,6 +147,13 @@ try {
 }
 $failWrite = false;
 
+// a failed read hides everything rather than falling back to defaults
+$exposureRows = false;
+$failedMap    = mcp_exposure_map(true);
+check(mcp_is_exposed('cacti-list-devices', 'cacti', $failedMap) === false && mcp_is_exposed('thold-list-thresholds', 'thold', $failedMap) === false, 'Failed read exposes nothing');
+$exposureRows = [];
+check(mcp_is_exposed('cacti-list-devices', 'cacti', mcp_exposure_map(true)) === true, 'An empty table still uses the defaults');
+
 // install creates the exposure table
 $created = [];
 function db_execute($sql) {
