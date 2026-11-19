@@ -128,13 +128,30 @@ virtual host or directory, followed by a reload:
 SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
 ```
 
-`api.php` routes live in the path after the script name (`/plugins/mcp/api.php/v1/abilities`),
-so nginx must split the path info. In the `location ~ \.php$` block that serves Cacti:
+Apache with `mod_php` served `api.php` routes with no extra path configuration.
+
+`api.php` routes live in the path after the script name
+(`/plugins/mcp/api.php/v1/abilities`), so nginx must match URIs where `.php` is
+followed by more path, split off the path info, and pass it to PHP. A
+`location ~ \.php$` block never matches these URLs; nginx answers with its own
+HTML 404. The location pattern and the two path-info lines below were verified with
+PHP-FPM; the other lines are standard boilerplate:
 
 ```nginx
-fastcgi_split_path_info ^(.+\.php)(/.+)$;
-fastcgi_param PATH_INFO $fastcgi_path_info;
+location ~ \.php(/|$) {
+    fastcgi_split_path_info ^(.+\.php)(/.+)$;
+    fastcgi_param PATH_INFO $fastcgi_path_info;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    fastcgi_pass unix:/run/php/php-fpm.sock;   # your PHP-FPM socket or host:port
+}
 ```
+
+Adjust the `include` and `fastcgi_pass` lines to match the block that already serves
+Cacti. Do not add `try_files $fastcgi_script_name =404;` to this block: it clears
+`$fastcgi_path_info`, and `api.php` then answers 404 `UNKNOWN_PATH`. If your
+configuration needs `try_files`, save the value first with
+`set $path_info $fastcgi_path_info;` and pass `fastcgi_param PATH_INFO $path_info;`.
 
 `mcp.php` has no path routes and does not need them.
 
@@ -251,7 +268,9 @@ environment-variable references in header values:
 ```
 
 Export `CACTI_MCP_TOKEN` in the environment that starts VS Code. Native Copilot
-files do not support `inputs` prompts. Guided setup offers the workspace-root file
+files do not support `inputs` prompts. VS Code's guided setup rejects `${...}`
+values, so add the `Authorization` header by editing the file, not through the
+guided flow. Guided setup offers the workspace-root file
 only when the experimental `chat.mcp.workspaceRootConfig.enabled` setting is on. See the
 [VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration).
 
