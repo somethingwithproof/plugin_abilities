@@ -11,6 +11,7 @@ $revoked     = false;
 $failCreate  = false;
 $failRealm   = false;
 $failRevoke  = false;
+$hooks       = [];
 
 function check(bool $ok, string $message) : void {
 	if (!$ok) {
@@ -58,6 +59,11 @@ function api_plugin_register_realm($plugin, $file, $display, $admin = true) {
 	}
 }
 
+function api_plugin_register_hook($plugin, $hook, $function, $file) {
+	global $hooks;
+	$hooks[] = [$plugin, $hook, $function, $file];
+}
+
 function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true, $db_conn = false) {
 	global $realm;
 	check($params === ['mcp', 'api.php,mcp.php'], 'Unexpected realm lookup');
@@ -69,6 +75,12 @@ check(!plugin_mcp_check_config(), 'A missing schema must block enable');
 plugin_mcp_install();
 check(plugin_mcp_check_config(), 'Fresh installation must be ready');
 check($realmWrites[0] === ['mcp', 'api.php,mcp.php', 'MCP and Abilities API', false], 'Realm must not be granted automatically');
+check(in_array(['mcp', 'config_settings', 'mcp_config_settings', 'setup.php'], $hooks, true), 'Install must register the config_settings hook');
+$tabs     = [];
+$settings = [];
+mcp_config_settings();
+check($tabs['mcp'] === 'MCP', 'Settings tab');
+check($settings['mcp']['mcp_public_url']['method'] === 'textbox' && $settings['mcp']['mcp_public_url']['max_length'] === 255, 'Public URL field');
 $tables['plugin_mcp_audit']['retained'] = 'audit fixture';
 plugin_mcp_install();
 check($tables['plugin_mcp_audit']['retained'] === 'audit fixture', 'Repeated setup must retain audit data');

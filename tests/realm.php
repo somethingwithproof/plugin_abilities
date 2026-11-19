@@ -27,6 +27,9 @@ function db_execute($sql, $log = true, $db_conn = false) {
 	return true;
 }
 
+function api_plugin_register_hook($plugin, $hook, $function, $file) {
+}
+
 function api_plugin_register_realm($plugin, $file, $display, $admin = true) {
 	global $registered;
 	$registered = [$plugin, $file];

@@ -10,9 +10,27 @@ function plugin_mcp_install() {
 	mcp_install_schema();
 	api_plugin_register_realm('mcp', 'api.php,mcp.php', __('MCP and Abilities API', 'mcp'), false);
 
+	api_plugin_register_hook('mcp', 'config_settings', 'mcp_config_settings', 'setup.php');
+
 	if (!plugin_mcp_check_config()) {
 		throw new RuntimeException(__('MCP installation is incomplete', 'mcp'));
 	}
+}
+
+function mcp_config_settings() {
+	global $tabs, $settings;
+
+	$tabs['mcp']     = __('MCP', 'mcp');
+	$settings['mcp'] = [
+		'mcp_public_url' => [
+			'friendly_name' => __('Public Cacti URL', 'mcp'),
+			'description'   => __('The address MCP clients use to reach this Cacti server, for example https://cacti.example.com/cacti. Required before the MCP endpoint answers.', 'mcp'),
+			'method'        => 'textbox',
+			'default'       => '',
+			'max_length'    => 255,
+			'size'          => 60
+		]
+	];
 }
 
 function plugin_mcp_uninstall() {

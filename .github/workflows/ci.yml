@@ -50,6 +50,7 @@ jobs:
               php tests/bootstrap.php
               php tests/api.php
               php tests/contract.php
+              php tests/origin.php
             '
 
   package:
