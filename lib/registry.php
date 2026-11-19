@@ -41,7 +41,7 @@ function abilities_check_schema(array $schema) : void {
 		'object'  => ['type', 'description', 'properties', 'required', 'additionalProperties'],
 		'integer' => ['type', 'description', 'minimum', 'maximum'],
 		'number'  => ['type', 'description', 'minimum', 'maximum'],
-		'string'  => ['type', 'description', 'minLength', 'maxLength', 'enum'],
+		'string'  => ['type', 'description', 'minLength', 'maxLength', 'enum', 'pattern'],
 		'boolean' => ['type', 'description'],
 		'array'   => ['type', 'description', 'items', 'maxItems']
 	];
@@ -57,6 +57,11 @@ function abilities_check_schema(array $schema) : void {
 
 	if (!is_string($type) || !isset($types[$type]) || array_diff(array_keys($schema), $types[$type])) {
 		throw new LogicException('Unsupported ability schema');
+	}
+
+	if (isset($schema['pattern']) && (!is_string($schema['pattern']) || str_contains($schema['pattern'], '~')
+		|| @preg_match('~' . $schema['pattern'] . '~Du', '') === false)) {
+		throw new LogicException('Invalid string pattern');
 	}
 
 	if ($type === 'object') {
@@ -142,7 +147,8 @@ function abilities_validate(mixed $value, array $schema) : void {
 		$length = preg_match_all('/./us', $value);
 
 		if ($length === false || $length < ($schema['minLength'] ?? 0) || $length > ($schema['maxLength'] ?? 4096)
-			|| (isset($schema['enum']) && !in_array($value, $schema['enum'], true))) {
+			|| (isset($schema['enum']) && !in_array($value, $schema['enum'], true))
+			|| (isset($schema['pattern']) && preg_match('~' . $schema['pattern'] . '~Du', $value) !== 1)) {
 			throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 		}
 	}
@@ -198,6 +204,12 @@ class AbilitiesRegistry {
 			abilities_check_schema($definition[$key]);
 		}
 		$this->entries[$id] = ['id' => $id] + $definition;
+	}
+
+	/** Take over the state of a clone made from this registry, once its plugin registered cleanly. */
+	public function adopt(self $scratch) : void {
+		$this->entries    = $scratch->entries;
+		$this->categories = $scratch->categories;
 	}
 
 	public function discover(array $principal) : array {

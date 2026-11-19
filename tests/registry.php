@@ -191,12 +191,18 @@ rejects(fn () => abilities_validate('1', ['type' => 'number']), 'INVALID_ARGUMEN
 rejects(fn () => abilities_validate(null, ['type' => 'string']), 'INVALID_ARGUMENTS');
 rejects(fn () => abilities_validate(11, ['type' => 'number', 'maximum' => 10]), 'INVALID_ARGUMENTS');
 
-try {
-	abilities_check_schema(['type' => 'string', 'pattern' => '.*']);
+// string patterns are anchored by the schema author; invalid or delimiter-breaking patterns fail closed
+abilities_check_schema(['type' => 'string', 'pattern' => '^devices/[1-9][0-9]{0,9}$']);
+abilities_validate('devices/12', ['type' => 'string', 'pattern' => '^devices/[1-9][0-9]{0,9}$']);
 
-	throw new RuntimeException('Unsupported keyword accepted');
-} catch (LogicException $expected) {
+foreach (['devices/0', 'devices/12345678901', "devices/1\n", 'x devices/1'] as $badName) {
+	rejects(fn () => abilities_validate($badName, ['type' => 'string', 'pattern' => '^devices/[1-9][0-9]{0,9}$']), 'INVALID_ARGUMENTS');
 }
+
+foreach (['(', 'a~b'] as $badPattern) {
+	throws_logic(fn () => abilities_check_schema(['type' => 'string', 'pattern' => $badPattern]), 'Bad pattern accepted: ' . $badPattern);
+}
+throws_logic(fn () => abilities_check_schema(['type' => 'string', 'pattern' => 5]), 'Non-string pattern accepted');
 abilities_validate('é', ['type' => 'string', 'maxLength' => 1, 'enum' => ['é'], 'description' => 'Accent']);
 rejects(fn () => abilities_validate('éé', ['type' => 'string', 'maxLength' => 1]), 'INVALID_ARGUMENTS');
 rejects(fn () => abilities_validate('other', ['type' => 'string', 'enum' => ['one']]), 'INVALID_ARGUMENTS');
