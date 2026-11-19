@@ -16,6 +16,7 @@ function mcp_install_schema() : void {
 			expires_at BIGINT UNSIGNED NOT NULL,
 			revoked TINYINT UNSIGNED NOT NULL DEFAULT 0,
 			created_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+			created_by INT UNSIGNED NOT NULL,
 			last_used_at BIGINT UNSIGNED NULL
 		) ENGINE=InnoDB',
 		'CREATE TABLE IF NOT EXISTS plugin_mcp_audit (
@@ -177,6 +178,7 @@ function mcp_set_exposure(array $ids, bool $exposed) : void {
 	}
 }
 
+const MCP_MAX_PAGE = 1000000;
 const MCP_AUDIT_OUTCOMES = ['started', 'succeeded', 'failed', 'denied', 'rejected'];
 
 /**
@@ -195,8 +197,9 @@ function mcp_token_list(array $filter, int $page, int $rows) : array {
 	}
 
 	return mcp_admin_page('SELECT COUNT(*) FROM plugin_mcp_token AS t' . $where,
-		'SELECT t.id, u.username, t.created_at, t.expires_at, t.last_used_at, t.revoked
-		FROM plugin_mcp_token AS t LEFT JOIN user_auth AS u ON u.id = t.user_id' . $where . ' ORDER BY t.id DESC',
+		'SELECT t.id, u.username, c.username AS created_by_name, t.created_by, t.created_at, t.expires_at, t.last_used_at, t.revoked
+		FROM plugin_mcp_token AS t LEFT JOIN user_auth AS u ON u.id = t.user_id
+		LEFT JOIN user_auth AS c ON c.id = t.created_by' . $where . ' ORDER BY t.id DESC',
 		$params, $page, $rows);
 }
 
@@ -206,19 +209,47 @@ function mcp_token_list(array $filter, int $page, int $rows) : array {
  * @throws InvalidArgumentException for a bad user ID or lifetime
  * @throws RuntimeException when the row cannot be stored
  */
-function mcp_token_create(int $userId, int $days) : string {
-	if ($userId < 1 || $days < 1 || $days > 365) {
+function mcp_token_create(int $userId, int $days, ?int $createdBy = null) : string {
+	$createdBy ??= $userId;
+
+	if ($userId < 1 || $createdBy < 1 || $days < 1 || $days > 365) {
 		throw new InvalidArgumentException('Invalid token owner or lifetime');
 	}
 	$token = 'cmcp_pat_' . bin2hex(random_bytes(32));
 	$now   = time();
 
-	if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
-		[$userId, mcp_token_hash($token), '["abilities:read"]', $now + $days * 86400, $now])) {
+	if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+		[$userId, mcp_token_hash($token), '["abilities:read"]', $now + $days * 86400, $now, $createdBy])) {
 		throw new RuntimeException('MCP token creation failed');
 	}
 
 	return $token;
+}
+
+/** ID of the token with this value, for the audit row written when an admin creates it. */
+function mcp_token_id(string $token) : int {
+	$hash = mcp_token_hash($token);
+
+	return $hash === null ? 0 : (int) db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash]);
+}
+
+/**
+ * Audit a console token action: one complete row, attributed to the acting admin. The token
+ * value never appears. $action is token-create or token-revoke, recorded as the ability name.
+ *
+ * @throws RuntimeException when the row cannot be written
+ */
+function mcp_audit_admin(int $actor, int $tokenId, string $action) : void {
+	if (!in_array($action, ['token-create', 'token-revoke'], true)) {
+		throw new InvalidArgumentException('Invalid admin action');
+	}
+	$now = time();
+
+	if (!db_execute_prepared('INSERT INTO plugin_mcp_audit
+		(request_id, token_id, user_id, ability, outcome, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		[bin2hex(random_bytes(16)), $tokenId, $actor, 'mcp-' . $action, 'succeeded', $now, $now])) {
+		throw new RuntimeException('MCP audit write failed');
+	}
 }
 
 /** @param list<int> $ids */
@@ -290,7 +321,8 @@ function mcp_audit_list(array $filter, int $page, int $rows) : array {
  * @throws RuntimeException when the database read fails
  */
 function mcp_admin_page(string $countSql, string $listSql, array $params, int $page, int $rows) : array {
-	if ($page < 1 || $rows < 1 || $rows > 500) {
+	// The cap keeps (page - 1) * rows far inside the integer range.
+	if ($page < 1 || $page > MCP_MAX_PAGE || $rows < 1 || $rows > 500) {
 		throw new InvalidArgumentException('Invalid page');
 	}
 	$total = db_fetch_cell_prepared($countSql, $params);

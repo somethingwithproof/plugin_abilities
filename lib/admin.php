@@ -77,3 +77,24 @@ function mcp_admin_parse_action(array $post) : array {
 
 	return ['action' => $action, 'ids' => array_values(array_unique($ids))];
 }
+
+/**
+ * Whether an admin may create a token for another user. A token lets its holder read Cacti
+ * as that user, so creating one for someone else needs the User Management realm too.
+ */
+function mcp_admin_may_create_for(int $actor, int $target, bool $hasUserAdmin) : bool {
+	return $actor > 0 && $target > 0 && ($target === $actor || $hasUserAdmin);
+}
+
+/** Issue a one-time form nonce into $session (Cacti's session array). It is not the token. */
+function mcp_admin_nonce_issue(array &$session) : string {
+	return $session['mcp_create_nonce'] = bin2hex(random_bytes(16));
+}
+
+/** Consume the nonce: true once for the issued value, false for a reused, missing, or wrong one. */
+function mcp_admin_nonce_consume(array &$session, string $given) : bool {
+	$issued = $session['mcp_create_nonce'] ?? null;
+	unset($session['mcp_create_nonce']);
+
+	return is_string($issued) && $given !== '' && hash_equals($issued, $given);
+}

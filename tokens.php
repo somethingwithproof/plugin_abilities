@@ -33,7 +33,7 @@ try {
 	}
 
 	if (isset($options['list'])) {
-		print json_encode(db_fetch_assoc('SELECT id, user_id, scopes, expires_at, created_at, last_used_at, revoked FROM plugin_mcp_token ORDER BY id'), JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR) . PHP_EOL;
+		print json_encode(db_fetch_assoc('SELECT id, user_id, scopes, expires_at, created_at, created_by, last_used_at, revoked FROM plugin_mcp_token ORDER BY id'), JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR) . PHP_EOL;
 	} elseif (isset($options['revoke'])) {
 		$id = filter_var($options['revoke'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
 
@@ -63,8 +63,8 @@ try {
 			throw new RuntimeException('Token already exists; generate a new value');
 		}
 
-		if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
-			[$user, $hash, '["abilities:read"]', time() + $days * 86400, time()])) {
+		if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+			[$user, $hash, '["abilities:read"]', time() + $days * 86400, time(), $user])) {
 			throw new RuntimeException('Token creation failed');
 		}
 		$id = db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash]);

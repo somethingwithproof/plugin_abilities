@@ -122,6 +122,32 @@ function mcp_admin_confirm(array $parsed, string $tab) : void {
 	bottom_footer();
 }
 
+/** Run $fn against the session array, opening and closing the session when Cacti has it closed. */
+function mcp_admin_with_session(callable $fn) : mixed {
+	$opened = session_status() === PHP_SESSION_NONE;
+
+	if ($opened) {
+		cacti_session_start();
+	}
+
+	try {
+		return $fn($_SESSION);
+	} finally {
+		if ($opened) {
+			cacti_session_close();
+		}
+	}
+}
+
+function mcp_admin_actor() : int {
+	return (int) ($_SESSION['sess_user_id'] ?? 0);
+}
+
+/** Cacti's Users/Groups realm (user_admin.php, realm 1 on 1.2.31). */
+function mcp_admin_has_user_admin() : bool {
+	return is_realm_allowed(1);
+}
+
 /** Create a token from the posted form. Returns the token once, or null with a message raised. */
 function mcp_admin_create_token() : ?string {
 	$userId = get_filter_request_var('user_id', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
@@ -129,6 +155,23 @@ function mcp_admin_create_token() : ?string {
 
 	if (!is_int($userId) || !is_int($days)) {
 		mcp_admin_error(__('Choose a user and an expiry of 1 to 365 days.', 'mcp'));
+
+		return null;
+	}
+	$actor = mcp_admin_actor();
+
+	// A token reads Cacti as its owner, so minting one for someone else needs user management rights.
+	if (!mcp_admin_may_create_for($actor, $userId, mcp_admin_has_user_admin())) {
+		mcp_admin_error(__('You may only create tokens for yourself without the Users/Groups permission.', 'mcp'));
+
+		return null;
+	}
+
+	// One submission per issued form, so reloading the response cannot mint a second token.
+	$given = get_nfilter_request_var('mcp_nonce');
+
+	if (!is_string($given) || !mcp_admin_with_session(fn (array &$session) => mcp_admin_nonce_consume($session, $given))) {
+		mcp_admin_error(__('This form was already submitted.', 'mcp'));
 
 		return null;
 	}
@@ -147,7 +190,19 @@ function mcp_admin_create_token() : ?string {
 	}
 
 	try {
-		return mcp_token_create($userId, $days);
+		$token = mcp_token_create($userId, $days, $actor);
+		$id    = mcp_token_id($token);
+
+		try {
+			mcp_audit_admin($actor, $id, 'token-create');
+		} catch (RuntimeException $error) {
+			// An unaudited token is not handed out.
+			mcp_token_revoke([$id]);
+
+			throw $error;
+		}
+
+		return $token;
 	} catch (InvalidArgumentException | RuntimeException $error) {
 		mcp_admin_error(__('The token could not be created.', 'mcp'));
 
@@ -203,7 +258,7 @@ function mcp_admin_abilities_tab() : void {
 function mcp_admin_paging_filters(array $extra = []) : array {
 	return [
 		'rows' => ['filter' => FILTER_VALIDATE_INT, 'pageset' => true, 'default' => '-1'],
-		'page' => ['filter' => FILTER_VALIDATE_INT, 'options' => ['options' => ['min_range' => 1]], 'default' => '1']
+		'page' => ['filter' => FILTER_VALIDATE_INT, 'options' => ['options' => ['min_range' => 1, 'max_range' => MCP_MAX_PAGE]], 'default' => '1']
 	] + $extra;
 }
 
@@ -239,7 +294,7 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 	print html_nav_bar(mcp_admin_url('?tab=tokens'), MAX_DISPLAY_PAGES, $page, $rows, $list['total'], 8, __('Tokens', 'mcp'), 'page', 'main');
 
 	html_start_box(__('Tokens', 'mcp'), '100%', '', '3', 'center', '');
-	html_header_checkbox([__('ID', 'mcp'), __('User', 'mcp'), __('Created', 'mcp'), __('Expires', 'mcp'), __('Last Used', 'mcp'), __('State', 'mcp')], true, mcp_admin_url('?tab=tokens'));
+	html_header_checkbox([__('ID', 'mcp'), __('User', 'mcp'), __('Created By', 'mcp'), __('Created', 'mcp'), __('Expires', 'mcp'), __('Last Used', 'mcp'), __('State', 'mcp')], true, mcp_admin_url('?tab=tokens'));
 
 	if ($list['rows'] === []) {
 		print "<tr class='tableRow'><td colspan='8'><em>" . html_escape(__('No tokens found', 'mcp')) . '</em></td></tr>';
@@ -259,6 +314,7 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 		form_alternate_row('line' . $i, true, $revoked);
 		form_selectable_cell(html_escape((string) $id), $id);
 		form_selectable_cell(html_escape((string) ($row['username'] ?? __('(deleted user)', 'mcp'))), $id);
+		form_selectable_cell(html_escape((string) ($row['created_by_name'] ?? '#' . $row['created_by'])), $id);
 		form_selectable_cell(html_escape(mcp_admin_time($row['created_at'])), $id);
 		form_selectable_cell(html_escape(mcp_admin_time($row['expires_at'])), $id);
 		form_selectable_cell(html_escape(mcp_admin_time($row['last_used_at'])), $id);
@@ -271,14 +327,20 @@ function mcp_admin_tokens_tab(?string $newToken) : void {
 	draw_actions_dropdown(['revoke' => __('Revoke', 'mcp')]);
 	print '</form>';
 
-	$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? ORDER BY username', ['on']);
+	// Without the Users/Groups permission an admin can only create a token for themselves.
+	if (mcp_admin_has_user_admin()) {
+		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? ORDER BY username', ['on']);
+	} else {
+		$users = db_fetch_assoc_prepared('SELECT id, username FROM user_auth WHERE enabled = ? AND id = ?', ['on', mcp_admin_actor()]);
+	}
+	$nonce = mcp_admin_with_session(fn (array &$session) => mcp_admin_nonce_issue($session));
 
 	html_start_box(__('Create Token', 'mcp'), '100%', '', '3', 'center', '');
 	print "<tr class='odd'><td><form id='mcp_create_token' action='" . html_escape(mcp_admin_url()) . "' method='post'><table class='filterTable'><tr><td>"
 		. html_escape(__('User', 'mcp')) . '</td><td>';
 	form_dropdown('user_id', $users ?: [], 'username', 'id', '', '', '');
 	print '</td><td>' . html_escape(__('Expires in days', 'mcp')) . "</td><td><input type='text' class='ui-state-default ui-corner-all' id='days' name='days' size='5' maxlength='3' value='90'></td>"
-		. "<td><input type='hidden' name='action' value='create_token'><input type='submit' class='ui-button ui-corner-all ui-widget' value='" . html_escape(__('Create', 'mcp')) . "'></td></tr></table></form></td></tr>";
+		. "<td><input type='hidden' name='action' value='create_token'><input type='hidden' name='mcp_nonce' value='" . html_escape($nonce) . "'><input type='submit' class='ui-button ui-corner-all ui-widget' value='" . html_escape(__('Create', 'mcp')) . "'></td></tr></table></form></td></tr>";
 	html_end_box();
 }
 
@@ -417,9 +479,21 @@ if ($mcp_action === 'actions' || $mcp_action === 'apply') {
 	if ($mcp_parsed['action'] === 'revoke') {
 		try {
 			mcp_token_revoke($mcp_parsed['ids']);
-			mcp_admin_info(__('The selected tokens were revoked.', 'mcp'));
 		} catch (InvalidArgumentException | RuntimeException $error) {
 			mcp_admin_error(__('The tokens could not be revoked.', 'mcp'));
+			$mcp_parsed['ids'] = [];
+		}
+
+		try {
+			foreach ($mcp_parsed['ids'] as $mcp_id) {
+				mcp_audit_admin(mcp_admin_actor(), $mcp_id, 'token-revoke');
+			}
+
+			if ($mcp_parsed['ids'] !== []) {
+				mcp_admin_info(__('The selected tokens were revoked.', 'mcp'));
+			}
+		} catch (RuntimeException $error) {
+			mcp_admin_error(__('The tokens were revoked, but the audit entry could not be written.', 'mcp'));
 		}
 	} elseif (mcp_admin_apply_exposure($mcp_parsed)) {
 		mcp_admin_info(__('The exposure settings were saved.', 'mcp'));
