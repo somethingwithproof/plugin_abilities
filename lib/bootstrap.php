@@ -66,7 +66,7 @@ function mcp_bootstrap_validate(array $options, array $server, string $authoriza
 	$method  = $server['REQUEST_METHOD'] ?? '';
 
 	if (!in_array($method, $options['methods'], true)) {
-		throw new AbilitiesError('INVALID_ARGUMENT', 'METHOD_NOT_ALLOWED', '', [], 405);
+		throw new AbilitiesError('UNIMPLEMENTED', 'METHOD_NOT_ALLOWED', '', [], 405);
 	}
 
 	if ($method === 'POST') {

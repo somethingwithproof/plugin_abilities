@@ -1,0 +1,376 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Cacti MCP Abilities API",
+    "version": "1.0.0",
+    "description": "Read-only abilities of the Cacti MCP plugin, following the Google API Improvement Proposals (AIP). Send a personal token (cmcp_pat_ followed by 64 hex characters) as Authorization: Bearer. Tokens in the query string are refused. The API runs only on the main poller.",
+    "license": {
+      "name": "GPL-2.0-or-later",
+      "identifier": "GPL-2.0-or-later"
+    }
+  },
+  "servers": [
+    {
+      "url": "{cacti}/plugins/mcp/api.php",
+      "variables": {
+        "cacti": {
+          "default": "https://cacti.example.com/cacti",
+          "description": "Base URL of the Cacti installation."
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "bearerToken": []
+    }
+  ],
+  "paths": {
+    "/v1/abilities": {
+      "get": {
+        "operationId": "ListAbilities",
+        "summary": "List the abilities the token owner may use.",
+        "parameters": [
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Maximum results per page. 0 or absent means 50; values above 100 are reduced to 100."
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "nextPageToken from the previous page. Valid only with the same filter."
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only category = \"<category>\"."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of abilities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAbilitiesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/abilities/{ability}": {
+      "get": {
+        "operationId": "GetAbility",
+        "summary": "Get one ability.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ability"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ability"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/abilities/{ability}:execute": {
+      "post": {
+        "operationId": "ExecuteAbility",
+        "summary": "Run a read-only ability.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ability"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteAbilityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ability result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecuteAbilityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "cmcp_pat_<64 hex>",
+        "description": "Tokens in the query string are refused."
+      }
+    },
+    "parameters": {
+      "ability": {
+        "name": "ability",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+){1,7}$",
+          "maxLength": 64
+        },
+        "description": "Ability id, for example cacti-list-devices."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "AIP-193 error.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Status"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Ability": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Resource name, for example abilities/cacti-list-devices."
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "inputSchema": {
+            "type": "object",
+            "description": "JSON Schema of the arguments."
+          },
+          "outputSchema": {
+            "type": "object",
+            "description": "JSON Schema of the result."
+          },
+          "annotations": {
+            "type": "object",
+            "properties": {
+              "readOnly": {
+                "type": "boolean",
+                "const": true
+              },
+              "destructive": {
+                "type": "boolean",
+                "const": false
+              },
+              "idempotent": {
+                "type": "boolean",
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "ListAbilitiesResponse": {
+        "type": "object",
+        "properties": {
+          "abilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ability"
+            }
+          },
+          "nextPageToken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "null on the last page."
+          }
+        }
+      },
+      "ExecuteAbilityRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "arguments"
+        ],
+        "properties": {
+          "arguments": {
+            "type": "object"
+          }
+        }
+      },
+      "ExecuteAbilityResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "description": "AIP-193 error.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "status",
+              "details"
+            ],
+            "properties": {
+              "code": {
+                "type": "integer",
+                "description": "HTTP status code."
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ABORTED",
+                  "ALREADY_EXISTS",
+                  "FAILED_PRECONDITION",
+                  "INTERNAL",
+                  "INVALID_ARGUMENT",
+                  "NOT_FOUND",
+                  "OUT_OF_RANGE",
+                  "PERMISSION_DENIED",
+                  "RESOURCE_EXHAUSTED",
+                  "UNAUTHENTICATED",
+                  "UNAVAILABLE",
+                  "UNIMPLEMENTED"
+                ]
+              },
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "@type"
+                  ],
+                  "properties": {
+                    "@type": {
+                      "type": "string",
+                      "enum": [
+                        "type.googleapis.com/google.rpc.ErrorInfo",
+                        "type.googleapis.com/google.rpc.BadRequest"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "domain": {
+                      "type": "string",
+                      "const": "cacti.net"
+                    },
+                    "fieldViolations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

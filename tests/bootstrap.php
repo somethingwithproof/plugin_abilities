@@ -81,6 +81,14 @@ rejects(fn () => mcp_bootstrap_validate($options, $post, $token . "\n"), 'INVALI
 rejects(fn () => mcp_bootstrap_validate($options, $post, 'Bearer cmcp_pat_' . str_repeat('AB', 32)), 'INVALID_TOKEN', 401);
 rejects(fn () => mcp_bootstrap_validate($options, $post, 'Basic dXNlcjpwYXNz'), 'INVALID_TOKEN', 401);
 
+// method_not_allowed_status
+try {
+	mcp_bootstrap_validate($options, ['REQUEST_METHOD' => 'GET'] + $post, $token);
+	throw new RuntimeException('Expected rejection');
+} catch (AbilitiesError $error) {
+	check($error->status === 'UNIMPLEMENTED' && $error->httpStatus() === 405, '405 must map to UNIMPLEMENTED');
+}
+
 // read_body_cap
 $file = tempnam(sys_get_temp_dir(), 'mcp');
 file_put_contents($file, str_repeat('x', 65536));

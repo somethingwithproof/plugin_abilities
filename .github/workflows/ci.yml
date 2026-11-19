@@ -48,6 +48,8 @@ jobs:
               php tests/aip.php
               php tests/storage.php
               php tests/bootstrap.php
+              php tests/api.php
+              php tests/contract.php
             '
 
   package:
