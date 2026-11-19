@@ -56,7 +56,7 @@ try {
 			throw new RuntimeException('User must be enabled and granted the MCP and Abilities API realm');
 		}
 		$scopes    = explode(',', $options['scopes'] ?? '');
-		$available = array_column(abilities_registry()->discover(['user_id' => $user, 'scopes' => $scopes]), 'name');
+		$available = array_column(mcp_registry()->discover(['user_id' => $user, 'scopes' => $scopes]), 'name');
 
 		if (!$available || array_diff($scopes, $available) || count(array_unique($scopes)) !== count($scopes)) {
 			throw new RuntimeException('Every scope must name an ability currently permitted for this user');

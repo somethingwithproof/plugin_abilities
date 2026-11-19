@@ -43,7 +43,7 @@ try {
 	}
 	// Browser session identity never grants API access. All helpers get this UID.
 	$principal = mcp_authenticate($authorization);
-	$registry  = abilities_registry();
+	$registry  = mcp_registry();
 
 	if ($method === 'GET') {
 		$response = ['apiVersion' => '1', 'abilities' => $registry->discover($principal),

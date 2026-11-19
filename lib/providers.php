@@ -5,7 +5,7 @@
 require_once __DIR__ . '/registry.php';
 require_once __DIR__ . '/../setup.php';
 
-function abilities_registry() : AbilitiesRegistry {
+function mcp_registry() : AbilitiesRegistry {
 	$registry = new AbilitiesRegistry();
 	$registry->register('cacti.system.info', 'Read Cacti and abilities API versions.', [
 		'type'                 => 'object',
@@ -35,7 +35,7 @@ function abilities_registry() : AbilitiesRegistry {
 		$rows   = get_allowed_devices('', 'h1.id', $offset . ',' . $limit, $total, $user);
 
 		return [
-			'devices'    => array_map('abilities_device_fields', array_values($rows)),
+			'devices'    => array_map('mcp_device_fields', array_values($rows)),
 			'nextOffset' => count($rows) === $limit ? $offset + $limit : null
 		];
 	});
@@ -52,7 +52,7 @@ function abilities_registry() : AbilitiesRegistry {
 			throw new AbilitiesError(404, 'device_unavailable');
 		}
 
-		return ['device' => abilities_device_fields(reset($rows))];
+		return ['device' => mcp_device_fields(reset($rows))];
 	});
 	// Only enabled plugins registered with this Cacti hook are loaded.
 	api_plugin_hook_function('abilities_register', $registry);
@@ -60,7 +60,7 @@ function abilities_registry() : AbilitiesRegistry {
 	return $registry;
 }
 
-function abilities_device_fields(array $row) : array {
+function mcp_device_fields(array $row) : array {
 	return [
 		'id'          => (int) $row['id'],
 		'description' => $row['description'],

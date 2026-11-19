@@ -44,6 +44,7 @@ jobs:
               php tests/registry.php
               php tests/lifecycle.php
               php tests/providers.php
+              php tests/realm.php
             '
 
   package:

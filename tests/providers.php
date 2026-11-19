@@ -48,7 +48,7 @@ function api_plugin_hook_function($name, $parm = null) {
 	return $parm;
 }
 
-$registry  = abilities_registry();
+$registry  = mcp_registry();
 $principal = ['user_id' => 7, 'scopes' => ['cacti.system.info', 'cacti.devices.list', 'cacti.devices.get', 'fixture.version']];
 $audit     = function ($id, $name, $outcome) {};
 check(count($registry->discover($principal)) === 4, 'Built-in and hook providers must be discoverable');
