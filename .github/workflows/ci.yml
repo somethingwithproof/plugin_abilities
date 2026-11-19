@@ -58,19 +58,19 @@ jobs:
       - name: Build and inspect archive
         run: |
           mkdir dist
-          git archive --format=tar.gz --prefix=abilities/ HEAD > dist/abilities.tar.gz
-          mkdir /tmp/abilities-package
-          tar -xzf dist/abilities.tar.gz -C /tmp/abilities-package
-          test -f /tmp/abilities-package/abilities/INFO
-          test -f /tmp/abilities-package/abilities/setup.php
-          test -f /tmp/abilities-package/abilities/images/abilities_logo.png
-          test ! -d /tmp/abilities-package/abilities/tests
-          test ! -d /tmp/abilities-package/abilities/.github
+          git archive --format=tar.gz --prefix=mcp/ HEAD > dist/mcp.tar.gz
+          mkdir /tmp/mcp-package
+          tar -xzf dist/mcp.tar.gz -C /tmp/mcp-package
+          test -f /tmp/mcp-package/mcp/INFO
+          test -f /tmp/mcp-package/mcp/setup.php
+          test -f /tmp/mcp-package/mcp/images/mcp_logo.png
+          test ! -d /tmp/mcp-package/mcp/tests
+          test ! -d /tmp/mcp-package/mcp/.github
           cd dist
-          sha256sum abilities.tar.gz > SHA256SUMS
+          sha256sum mcp.tar.gz > SHA256SUMS
       - name: Upload plugin archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: abilities-plugin
+          name: mcp-plugin
           path: dist/*
           if-no-files-found: error

@@ -13,7 +13,7 @@ function abilities_registry() : AbilitiesRegistry {
 		'additionalProperties' => false
 	], fn (int $user) => is_realm_allowed(15, $user), function () {
 		global $config;
-		$info = plugin_abilities_version();
+		$info = plugin_mcp_version();
 
 		return [
 			'cactiVersion'  => $config['cacti_version'],

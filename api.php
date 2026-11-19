@@ -38,11 +38,11 @@ try {
 	require_once __DIR__ . '/lib/storage.php';
 	require_once __DIR__ . '/lib/providers.php';
 
-	if (!api_plugin_is_enabled('abilities') || (int) $config['poller_id'] !== 1) {
+	if (!api_plugin_is_enabled('mcp') || (int) $config['poller_id'] !== 1) {
 		throw new AbilitiesError(503, 'plugin_unavailable');
 	}
 	// Browser session identity never grants API access. All helpers get this UID.
-	$principal = abilities_authenticate($authorization);
+	$principal = mcp_authenticate($authorization);
 	$registry  = abilities_registry();
 
 	if ($method === 'GET') {
@@ -72,7 +72,7 @@ try {
 			throw new AbilitiesError(400, 'invalid_request');
 		}
 		$response = $registry->execute($principal, $request->name, $request->arguments,
-			fn ($id, $name, $outcome) => abilities_audit($principal, $id, $name, $outcome));
+			fn ($id, $name, $outcome) => mcp_audit($principal, $id, $name, $outcome));
 	}
 	print json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
 } catch (Throwable $error) {

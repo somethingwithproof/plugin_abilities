@@ -22,7 +22,7 @@ require_once __DIR__ . '/lib/storage.php';
 require_once __DIR__ . '/lib/providers.php';
 
 try {
-	if (!api_plugin_is_enabled('abilities') || (int) $config['poller_id'] !== 1) {
+	if (!api_plugin_is_enabled('mcp') || (int) $config['poller_id'] !== 1) {
 		throw new RuntimeException('Enable the plugin on the main poller first');
 	}
 
@@ -31,15 +31,15 @@ try {
 	}
 
 	if (isset($options['list'])) {
-		print json_encode(db_fetch_assoc('SELECT id, user_id, scopes, expires_at, revoked FROM plugin_abilities_token ORDER BY id'), JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR) . PHP_EOL;
+		print json_encode(db_fetch_assoc('SELECT id, user_id, scopes, expires_at, revoked FROM plugin_mcp_token ORDER BY id'), JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR) . PHP_EOL;
 	} elseif (isset($options['revoke'])) {
 		$id = filter_var($options['revoke'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
 
-		if ($id === false || !db_fetch_cell_prepared('SELECT id FROM plugin_abilities_token WHERE id = ?', [$id])) {
+		if ($id === false || !db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE id = ?', [$id])) {
 			throw new RuntimeException('Unknown token ID');
 		}
 
-		if (!db_execute_prepared('UPDATE plugin_abilities_token SET revoked = 1 WHERE id = ?', [$id])) {
+		if (!db_execute_prepared('UPDATE plugin_mcp_token SET revoked = 1 WHERE id = ?', [$id])) {
 			throw new RuntimeException('Revocation failed');
 		}
 		print "Token revoked.\n";
@@ -52,8 +52,8 @@ try {
 		}
 		$user = (int) db_fetch_cell_prepared('SELECT id FROM user_auth WHERE username = ? AND enabled = ?', [$options['create'], 'on']);
 
-		if ($user <= 0 || !abilities_has_realm($user)) {
-			throw new RuntimeException('User must be enabled and granted the Abilities API realm');
+		if ($user <= 0 || !mcp_has_realm($user)) {
+			throw new RuntimeException('User must be enabled and granted the MCP and Abilities API realm');
 		}
 		$scopes    = explode(',', $options['scopes'] ?? '');
 		$available = array_column(abilities_registry()->discover(['user_id' => $user, 'scopes' => $scopes]), 'name');
@@ -63,15 +63,15 @@ try {
 		}
 		$hash = hash('sha256', $token);
 
-		if (db_fetch_cell_prepared('SELECT id FROM plugin_abilities_token WHERE token_hash = ?', [$hash])) {
+		if (db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash])) {
 			throw new RuntimeException('Token already exists; generate a new value');
 		}
 
-		if (!db_execute_prepared('INSERT INTO plugin_abilities_token (user_id, token_hash, scopes, expires_at) VALUES (?, ?, ?, ?)',
+		if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at) VALUES (?, ?, ?, ?)',
 			[$user, $hash, json_encode($scopes, JSON_THROW_ON_ERROR), time() + $days * 86400])) {
 			throw new RuntimeException('Token creation failed');
 		}
-		$id = db_fetch_cell_prepared('SELECT id FROM plugin_abilities_token WHERE token_hash = ?', [$hash]);
+		$id = db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash]);
 		print 'Created token ID ' . $id . PHP_EOL;
 	}
 } catch (Throwable $error) {

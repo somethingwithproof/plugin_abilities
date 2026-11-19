@@ -54,7 +54,7 @@ $audit     = function ($id, $name, $outcome) {};
 check(count($registry->discover($principal)) === 4, 'Built-in and hook providers must be discoverable');
 check($registry->discover(['user_id' => 8, 'scopes' => $principal['scopes']]) === [], 'Provider realm isolation');
 $result = $registry->execute($principal, 'cacti.system.info', new stdClass(), $audit);
-check($result['result']->pluginVersion === plugin_abilities_version()['version'], 'Reported version must come from INFO');
+check($result['result']->pluginVersion === plugin_mcp_version()['version'], 'Reported version must come from INFO');
 $result = $registry->execute($principal, 'cacti.devices.list', (object) ['limit' => 1], $audit);
 check($result['result']->nextOffset === 1 && $result['result']->devices[0]['id'] === 1, 'Native pagination');
 check(array_keys($result['result']->devices[0]) === ['id', 'description', 'hostname', 'disabled', 'status'], 'Provider must return only allowed fields');

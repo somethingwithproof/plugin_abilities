@@ -5,23 +5,25 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 <h1 align="center">
 	<picture>
-		<source media="(prefers-color-scheme: dark)" srcset="images/abilities_logo_dark.png">
-		<img src="images/abilities_logo.png" width="360" alt="Cacti Abilities: a cactus with a shield. Discover. Authorize. Execute.">
+		<source media="(prefers-color-scheme: dark)" srcset="images/mcp_logo_dark.png">
+		<img src="images/mcp_logo.png" width="360" alt="Cacti MCP: a cactus with a shield. Discover. Authorize. Execute.">
 	</picture>
 </h1>
 
 <p align="center">
-	<a href="https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml"><img src="https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI"></a>
+	<a href="https://github.com/somethingwithproof/plugin_mcp/actions/workflows/ci.yml"><img src="https://github.com/somethingwithproof/plugin_mcp/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI"></a>
 	<a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue" alt="License: GPL-2.0-or-later"></a>
 	<img src="https://img.shields.io/badge/Cacti-1.2.31%2B-2e7d32" alt="Cacti 1.2.31+">
 	<img src="https://img.shields.io/badge/PHP-8.2%2B-777bb4?logo=php&amp;logoColor=white" alt="PHP 8.2+">
 	<img src="https://img.shields.io/badge/Abilities_API-v1-2e7d32" alt="Abilities API v1">
 </p>
 
-Cacti Abilities is a Cacti plugin that exposes named, permission-filtered
+Cacti MCP is a Cacti plugin that exposes named, permission-filtered
 operations to external clients through an HTTPS API. Cacti owns authorization
 and execution; the separate [cacti-mcp adapter](https://github.com/somethingwithproof/cacti-mcp)
 turns those operations into MCP tools.
+
+The plugin hosts the Abilities API.
 
 **Status: in development, before 1.0.** Version 0.1.0 provides read-only device
 inventory and installation versions. There is no tagged release yet. Doctor
@@ -238,7 +240,7 @@ Cacti database and apply an appropriate audit retention policy externally.
 
 The plugin version is recorded in [INFO](INFO). Until tagged releases are
 available, use a source checkout or the `abilities-plugin` artifact from a
-successful [CI run](https://github.com/somethingwithproof/plugin_abilities/actions/workflows/ci.yml).
+successful [CI run](https://github.com/somethingwithproof/plugin_mcp/actions/workflows/ci.yml).
 The artifact contains `abilities.tar.gz` and `SHA256SUMS`. Verify the checksum
 before extracting the `abilities/` directory into Cacti's `plugins/` directory.
 GitHub's automatic source archives use a different top-level directory name.

@@ -39,7 +39,7 @@ function db_execute($sql, $log = true, $db_conn = false) {
 
 		return true;
 	}
-	check($sql === 'UPDATE plugin_abilities_token SET revoked = 1', 'Unexpected lifecycle query');
+	check($sql === 'UPDATE plugin_mcp_token SET revoked = 1', 'Unexpected lifecycle query');
 
 	if ($failRevoke) {
 		return false;
@@ -60,55 +60,55 @@ function api_plugin_register_realm($plugin, $file, $display, $admin = true) {
 
 function db_fetch_cell_prepared($sql, $params = [], $col_name = '', $log = true, $db_conn = false) {
 	global $realm;
-	check($params === ['abilities', 'api.php'], 'Unexpected realm lookup');
+	check($params === ['mcp', 'api.php,mcp.php'], 'Unexpected realm lookup');
 
 	return $realm;
 }
 
-check(!plugin_abilities_check_config(), 'A missing schema must block enable');
-plugin_abilities_install();
-check(plugin_abilities_check_config(), 'Fresh installation must be ready');
-check($realmWrites[0] === ['abilities', 'api.php', 'Abilities API', false], 'Realm must not be granted automatically');
-$tables['plugin_abilities_audit']['retained'] = 'audit fixture';
-plugin_abilities_install();
-check($tables['plugin_abilities_audit']['retained'] === 'audit fixture', 'Repeated setup must retain audit data');
-plugin_abilities_uninstall();
+check(!plugin_mcp_check_config(), 'A missing schema must block enable');
+plugin_mcp_install();
+check(plugin_mcp_check_config(), 'Fresh installation must be ready');
+check($realmWrites[0] === ['mcp', 'api.php,mcp.php', 'MCP and Abilities API', false], 'Realm must not be granted automatically');
+$tables['plugin_mcp_audit']['retained'] = 'audit fixture';
+plugin_mcp_install();
+check($tables['plugin_mcp_audit']['retained'] === 'audit fixture', 'Repeated setup must retain audit data');
+plugin_mcp_uninstall();
 check($revoked, 'Uninstall must revoke tokens');
-check($tables['plugin_abilities_audit']['retained'] === 'audit fixture', 'Uninstall must retain audit data');
-plugin_abilities_install();
+check($tables['plugin_mcp_audit']['retained'] === 'audit fixture', 'Uninstall must retain audit data');
+plugin_mcp_install();
 check($revoked, 'Reinstall must not reactivate tokens');
-unset($tables['plugin_abilities_audit']);
-check(!plugin_abilities_check_config(), 'A missing audit table must block enable');
+unset($tables['plugin_mcp_audit']);
+check(!plugin_mcp_check_config(), 'A missing audit table must block enable');
 $realm     = false;
 $failRealm = true;
 
 try {
-	plugin_abilities_install();
+	plugin_mcp_install();
 
 	throw new LogicException('Realm registration failure must fail installation');
 } catch (RuntimeException $error) {
-	check($error->getMessage() === 'Abilities installation is incomplete', 'Unexpected setup error');
+	check($error->getMessage() === 'MCP installation is incomplete', 'Unexpected setup error');
 }
 $failRealm  = false;
 $failCreate = true;
 
 try {
-	plugin_abilities_install();
+	plugin_mcp_install();
 
 	throw new LogicException('Schema failure must fail installation');
 } catch (RuntimeException $error) {
-	check($error->getMessage() === 'Abilities schema creation failed', 'Unexpected schema error');
+	check($error->getMessage() === 'MCP schema creation failed', 'Unexpected schema error');
 }
 $failRevoke = true;
 
 try {
-	plugin_abilities_uninstall();
+	plugin_mcp_uninstall();
 
 	throw new LogicException('Token revocation failure must fail uninstall');
 } catch (RuntimeException $error) {
-	check($error->getMessage() === 'Abilities token revocation failed', 'Unexpected revoke error');
+	check($error->getMessage() === 'MCP token revocation failed', 'Unexpected revoke error');
 }
-unset($tables['plugin_abilities_token']);
-plugin_abilities_uninstall();
-check(plugin_abilities_version()['name'] === 'abilities', 'Native version callback');
+unset($tables['plugin_mcp_token']);
+plugin_mcp_uninstall();
+check(plugin_mcp_version()['name'] === 'mcp', 'Native version callback');
 print "Plugin installation, enable readiness, retention, and failure checks passed.\n";
