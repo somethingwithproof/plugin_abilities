@@ -519,19 +519,32 @@ Repository `somethingwithproof/cacti-mcp`, branch `fix/mcp-2-sdk` from `develop`
 
 ## Follow-up plans
 
-Out of scope for this plan. Each entry below becomes its own plan, in this order, after Task 15 and the final review.
+Out of scope for this plan. Each entry below becomes its own plan, in this order, after Task 15 and the final review. Items 1 to 3 come before the first tagged release; the live run in Task 13 found three defects (D1, D2, D3) that the unit tests could not see.
 
-1. **Plan 2: OAuth 2.1 and connected apps.** Hosted ChatGPT and Claude connectors cannot send a personal access token, so this plan is what lets most target users connect.
+1. **Live integration tests in CI.** Turn the Task 13 manual run into a CI job.
+   - Matrix: Cacti 1.2.31 on Apache with mod_php, and Cacti develop on nginx with PHP-FPM, each with MariaDB in a service container.
+   - Install the plugin from the CI tarball, create a token with `tokens.php`, then run the smoke checks: MCP discovery, `tools/list` and `tools/call` on both protocol revisions, the HTTP API list, get and execute routes, the 401, 403, 405 and 503 JSON error paths, no `Set-Cookie` on token endpoints, and the Origin rules.
+   - Run MCP Inspector CLI against `mcp.php`, pinned to an exact version.
+   - Add regression checks for D1 (nginx `PATH_INFO` routing per the README), D2 (JSON 503 when the database is down), and D3 (a token cannot be created for the guest account from a session opened earlier).
+2. **Upgrade path.** `plugin_mcp_upgrade()` currently does nothing, and the tables changed during development without migrations.
+   - Record the schema version in `settings` and run ordered, idempotent migrations for `plugin_mcp_token`, `plugin_mcp_audit` and `plugin_mcp_ability`, using the Cacti schema APIs available on 1.2.31.
+   - Re-register the realm file list (`MCP_REALM_FILES`) and hooks on upgrade, and write the new version only after every migration succeeds.
+   - Test a fresh install, an upgrade from a database created by the current branch schema, and a repeated upgrade run, on 1.2.31 and develop.
+3. **Release hygiene.**
+   - Rename `locales/po/abilities.pot` to the plugin's `mcp` text domain and regenerate it.
+   - Publish the CI tarball as the release artifact with a SHA-256 checksum.
+   - Start a CHANGELOG, then tag 0.1.0.
+4. **Plan 2: OAuth 2.1 and connected apps.** Hosted ChatGPT and Claude connectors cannot send a personal access token, so this plan is what lets most target users connect.
    - RFC 9728 protected resource metadata, and `WWW-Authenticate` with `resource_metadata`.
    - Client ID Metadata Documents preferred; dynamic client registration only as a deprecated fallback.
    - RFC 8707 resource binding to the Public Cacti URL, and RFC 9207 `iss`.
    - `cmcp_at_` and `cmcp_rt_` tokens.
    - A console page for connected apps, with revoke.
-2. **Graph data ability.** `cacti-get-graph-data` takes a graph or data source, a time range and a consolidation function. It returns RRD series through Cacti's fetch layer, with a cap on points and series. Device lists alone answer few real questions.
-3. **Request limits.** Per-token rate limits, a maximum result size, and an execution timeout, each returned as AIP-193 `RESOURCE_EXHAUSTED` or `DEADLINE_EXCEEDED`, so a runaway agent loop cannot load the poller database.
-4. **Core CSRF exemption.** Upstream a supported exemption for token-only endpoints (building on `CACTI_API_REQUEST` from `feature/rest-api-tokens`), then remove the Task 6 workaround once a released Cacti carries it.
-5. **More read abilities.** Data sources, graph trees, poller status, a filtered Cacti log tail, and threshold breaches through thold's own `abilities_register` hook.
-6. **Narrower tokens.** A token limited to chosen abilities or a device subset, with a short default expiry for shared assistants.
-7. **Plugin author kit.** A documented `abilities_register` example, a sample plugin, and a check script that validates schemas, the id prefix and annotations.
-8. **Write abilities (deferred).** Acknowledge an alert, set a maintenance window, disable a device. Each needs a separate `abilities:write` scope, is off by default, sets `destructiveHint`, and records before and after values in the audit. Start only after the read-only surface has shipped and been adopted.
-9. **MCP prompts and resources (optional).** Prompts such as "triage a down device", and graph images as resources. Low priority because client support varies.
+5. **Graph data ability.** `cacti-get-graph-data` takes a graph or data source, a time range and a consolidation function. It returns RRD series through Cacti's fetch layer, with a cap on points and series. Device lists alone answer few real questions.
+6. **Request limits.** Per-token rate limits, a maximum result size, and an execution timeout, each returned as AIP-193 `RESOURCE_EXHAUSTED` or `DEADLINE_EXCEEDED`, so a runaway agent loop cannot load the poller database.
+7. **Core CSRF exemption.** Upstream a supported exemption for token-only endpoints (building on `CACTI_API_REQUEST` from `feature/rest-api-tokens`), then remove the Task 6 workaround once a released Cacti carries it.
+8. **More read abilities.** Data sources, graph trees, poller status, a filtered Cacti log tail, and threshold breaches through thold's own `abilities_register` hook.
+9. **Narrower tokens.** A token limited to chosen abilities or a device subset, with a short default expiry for shared assistants.
+10. **Plugin author kit.** A documented `abilities_register` example, a sample plugin, and a check script that validates schemas, the id prefix and annotations.
+11. **Write abilities (deferred).** Acknowledge an alert, set a maintenance window, disable a device. Each needs a separate `abilities:write` scope, is off by default, sets `destructiveHint`, and records before and after values in the audit. Start only after the read-only surface has shipped and been adopted.
+12. **MCP prompts and resources (optional).** Prompts such as "triage a down device", and graph images as resources. Low priority because client support varies.
