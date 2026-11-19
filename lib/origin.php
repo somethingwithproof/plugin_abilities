@@ -9,7 +9,7 @@
  * @return array{scheme: string, host: string, port: int, path: string}|null
  */
 function mcp_parse_url(string $url) : ?array {
-	if (!preg_match('~^(https?)://([^/?#]*)([^?#]*)(?:\?[^#]*)?(?:#.*)?$~i', $url, $parts)) {
+	if (!preg_match('~^(https?)://([^/?#]*)([^?#]*)(?:\?[^#]*)?(?:#.*)?$~iD', $url, $parts)) {
 		return null;
 	}
 
@@ -18,7 +18,7 @@ function mcp_parse_url(string $url) : ?array {
 	$path      = $parts[3];
 
 	// Userinfo would let "https://cacti.example.com@evil.example" pass a prefix check.
-	if (!preg_match('~^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::([0-9]+))?$~', $authority, $hostParts)) {
+	if (!preg_match('~^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::([0-9]+))?$~D', $authority, $hostParts)) {
 		return null;
 	}
 
@@ -28,7 +28,7 @@ function mcp_parse_url(string $url) : ?array {
 		if (filter_var(substr($host, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
 			return null;
 		}
-	} elseif (!preg_match('~^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$~', $host)) {
+	} elseif (!preg_match('~^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$~D', $host)) {
 		return null;
 	}
 
@@ -43,7 +43,7 @@ function mcp_parse_url(string $url) : ?array {
 		}
 	}
 
-	if ($path !== '' && !preg_match('#^/[A-Za-z0-9._~!$&\'()*+,;=:@%/-]*$#', $path)) {
+	if ($path !== '' && !preg_match('#^/[A-Za-z0-9._~!$&\'()*+,;=:@%/-]*$#D', $path)) {
 		return null;
 	}
 
@@ -102,8 +102,10 @@ function mcp_origin_allowed(?string $origin, string $publicUrl) : bool {
 	$allowed = mcp_parse_url($publicUrl);
 	$given   = mcp_parse_url($origin);
 
-	// A browser Origin never carries a path, so one means the value is not an origin.
-	if ($allowed === null || $given === null || $given['path'] !== '' || str_ends_with($origin, '/')) {
+	// An Origin is exactly scheme://host[:port]. Anything the parser tolerates
+	// beyond that (path, query, fragment, trailing slash, explicit default
+	// port) means the value is not a browser-serialized origin.
+	if ($allowed === null || $given === null || strtolower($origin) !== mcp_origin_string($given)) {
 		return false;
 	}
 

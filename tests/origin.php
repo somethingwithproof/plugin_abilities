@@ -62,7 +62,12 @@ check(mcp_origin_allowed(null, $public) === true, 'absent origin allowed');
 check(mcp_origin_allowed('https://cacti.example.com', $public) === true, 'origin_match');
 check(mcp_origin_allowed('https://CACTI.example.com', $public) === true, 'origin host case');
 check(mcp_origin_allowed('https://evil.example', $public) === false, 'origin_mismatch');
-check(mcp_origin_allowed('https://cacti.example.com:443', $public) === true, 'default_port');
+check(mcp_origin_allowed('https://cacti.example.com:443', $public) === false, 'explicit default port is not a serialized origin');
+check(mcp_origin_allowed("https://cacti.example.com\n", $public) === false, 'trailing newline');
+check(mcp_origin_allowed('https://cacti.example.com?x', $public) === false, 'origin with query');
+check(mcp_origin_allowed('https://cacti.example.com#f', $public) === false, 'origin with fragment');
+check(mcp_origin_allowed('https://cacti.example.com/', $public) === false, 'origin with trailing slash');
+check(mcp_origin_allowed('https://cacti.example.com:0443', 'https://cacti.example.com:443') === false, 'leading-zero port');
 check(mcp_origin_allowed('https://cacti.example.com:8443', $public) === false, 'other port');
 check(mcp_origin_allowed('http://cacti.example.com', $public) === false, 'scheme mismatch');
 check(mcp_origin_allowed('https://cacti.example.com.evil.example', $public) === false, 'suffix host');
@@ -75,6 +80,6 @@ check(mcp_origin_allowed('https://cacti.example.com:8443', 'https://cacti.exampl
 check(mcp_origin_allowed('https://cacti.example.com', 'https://cacti.example.com:8443/c') === false, 'explicit port mismatch');
 check(mcp_origin_allowed('https://[::1]:8443', 'https://[::1]:8443/cacti') === true, 'IPv6 origin');
 check(mcp_origin_allowed('http://[::1]:8443', 'https://[::1]:8443/cacti') === false, 'IPv6 scheme mismatch');
-check(mcp_origin_allowed('http://localhost:80', 'http://localhost/cacti') === true, 'http default port');
+check(mcp_origin_allowed('http://localhost', 'http://localhost:80/cacti') === true, 'http default port');
 
 print "Public URL normalization and origin checks passed.\n";
