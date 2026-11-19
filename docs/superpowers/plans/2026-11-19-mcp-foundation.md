@@ -482,3 +482,22 @@ Repository `somethingwithproof/cacti-mcp`, branch `fix/mcp-2-sdk` from `develop`
 - [ ] **Step 3: Implement.** Update the README for the rename and the new token format, and say the plugin also serves MCP over HTTP directly.
 - [ ] **Step 4: Run** `uv run pytest && uv run ruff check && uv run ruff format --check`. Expected: pass.
 - [ ] **Step 5: Commit** `feat: target the Cacti MCP plugin's v2 Abilities API`.
+
+## Follow-up plans
+
+Out of scope for this plan. Each entry below becomes its own plan, in this order, after Task 15 and the final review.
+
+1. **Plan 2: OAuth 2.1 and connected apps.** Hosted ChatGPT and Claude connectors cannot send a personal access token, so this plan is what lets most target users connect.
+   - RFC 9728 protected resource metadata, and `WWW-Authenticate` with `resource_metadata`.
+   - Client ID Metadata Documents preferred; dynamic client registration only as a deprecated fallback.
+   - RFC 8707 resource binding to the Public Cacti URL, and RFC 9207 `iss`.
+   - `cmcp_at_` and `cmcp_rt_` tokens.
+   - A console page for connected apps, with revoke.
+2. **Graph data ability.** `cacti-get-graph-data` takes a graph or data source, a time range and a consolidation function. It returns RRD series through Cacti's fetch layer, with a cap on points and series. Device lists alone answer few real questions.
+3. **Request limits.** Per-token rate limits, a maximum result size, and an execution timeout, each returned as AIP-193 `RESOURCE_EXHAUSTED` or `DEADLINE_EXCEEDED`, so a runaway agent loop cannot load the poller database.
+4. **Core CSRF exemption.** Upstream a supported exemption for token-only endpoints (building on `CACTI_API_REQUEST` from `feature/rest-api-tokens`), then remove the Task 6 workaround once a released Cacti carries it.
+5. **More read abilities.** Data sources, graph trees, poller status, a filtered Cacti log tail, and threshold breaches through thold's own `abilities_register` hook.
+6. **Narrower tokens.** A token limited to chosen abilities or a device subset, with a short default expiry for shared assistants.
+7. **Plugin author kit.** A documented `abilities_register` example, a sample plugin, and a check script that validates schemas, the id prefix and annotations.
+8. **Write abilities (deferred).** Acknowledge an alert, set a maintenance window, disable a device. Each needs a separate `abilities:write` scope, is off by default, sets `destructiveHint`, and records before and after values in the audit. Start only after the read-only surface has shipped and been adopted.
+9. **MCP prompts and resources (optional).** Prompts such as "triage a down device", and graph images as resources. Low priority because client support varies.
