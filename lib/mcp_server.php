@@ -82,6 +82,11 @@ function mcp_rpc_call(stdClass $params, AbilitiesRegistry $registry, array $prin
 		$response   = $registry->execute($principal, $params->name, $arguments, $audit);
 		$structured = $response['result'] ?: new stdClass();
 
+		// structuredContent must be a JSON object; a non-empty list can only come from a misdeclared ability.
+		if (is_array($structured) && array_is_list($structured)) {
+			throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
+		}
+
 		return ['content' => [['type' => 'text', 'text' => json_encode($structured, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)]],
 			'structuredContent' => $structured];
 	} catch (Throwable $error) {
@@ -142,7 +147,7 @@ function mcp_rpc_handle(string $httpMethod, array $headers, string $body, Abilit
 	$params = $message->params ?? new stdClass();
 
 	if (!$params instanceof stdClass) {
-		return mcp_rpc_error(400, -32602, 'params must be an object.', null, $id);
+		return mcp_rpc_error(200, -32602, 'params must be an object.', null, $id);
 	}
 
 	$meta   = $params->_meta ?? null;
@@ -169,6 +174,12 @@ function mcp_rpc_handle(string $httpMethod, array $headers, string $body, Abilit
 		}
 	}
 
+	// Before negotiation a legacy client may send no version header; once it sends one, it must be a revision this server speaks.
+	if (!$modern && $method !== 'initialize' && isset($headers['mcp-protocol-version'])
+		&& !in_array($headers['mcp-protocol-version'], [MCP_VERSION_LEGACY, '2025-06-18', '2025-03-26'], true)) {
+		return mcp_rpc_error(400, -32600, 'Unsupported protocol version.', null, $id);
+	}
+
 	// Modern results name their type, and cacheable ones declare how long and for whom.
 	$wrap = fn (array|stdClass $result, bool $cacheable = false) => ['jsonrpc' => '2.0', 'id' => $id, 'result' => $modern
 		? ['resultType' => 'complete'] + ($cacheable ? ['cacheScope' => 'private', 'ttlMs' => 0] : []) + (array) $result
@@ -176,27 +187,32 @@ function mcp_rpc_handle(string $httpMethod, array $headers, string $body, Abilit
 		: $result];
 	$ok    = fn (array|stdClass $result, bool $cacheable = false) => ['status' => 200, 'headers' => [], 'body' => $wrap($result, $cacheable)];
 
-	switch ($method) {
-		case 'server/discover':
-			if ($modern) {
-				return $ok(['supportedVersions' => [MCP_VERSION_MODERN, MCP_VERSION_LEGACY], 'capabilities' => ['tools' => new stdClass()]], true);
-			}
-			break;
-		case 'initialize':
-			if (!$modern) {
-				return $ok(['protocolVersion' => MCP_VERSION_LEGACY, 'capabilities' => ['tools' => new stdClass()], 'serverInfo' => $info]);
-			}
-			break;
-		case 'ping':
-			return $ok(new stdClass());
-		case 'tools/list':
-			return $ok(['tools' => array_map('mcp_rpc_tool', $registry->discover($principal))], true);
-		case 'tools/call':
-			if (!is_string($params->name ?? null)) {
-				return mcp_rpc_error($modern ? 400 : 200, -32602, 'params.name must be a tool name.', null, $id);
-			}
+	try {
+		switch ($method) {
+			case 'server/discover':
+				if ($modern) {
+					return $ok(['supportedVersions' => [MCP_VERSION_MODERN, MCP_VERSION_LEGACY], 'capabilities' => ['tools' => new stdClass()]], true);
+				}
+				break;
+			case 'initialize':
+				if (!$modern) {
+					return $ok(['protocolVersion' => MCP_VERSION_LEGACY, 'capabilities' => ['tools' => new stdClass()], 'serverInfo' => $info]);
+				}
+				break;
+			case 'ping':
+				return $ok(new stdClass());
+			case 'tools/list':
+				return $ok(['tools' => array_map('mcp_rpc_tool', $registry->discover($principal))], true);
+			case 'tools/call':
+				if (!is_string($params->name ?? null)) {
+					return mcp_rpc_error($modern ? 400 : 200, -32602, 'params.name must be a tool name.', null, $id);
+				}
 
-			return $ok(mcp_rpc_call($params, $registry, $principal, $audit));
+				return $ok(mcp_rpc_call($params, $registry, $principal, $audit));
+		}
+	} catch (Throwable $error) {
+		// A plugin permission callback can throw during discovery; keep the detail out of the response.
+		return mcp_rpc_error($modern ? 500 : 200, -32603, 'Internal error.', null, $id);
 	}
 
 	return mcp_rpc_error($modern ? 404 : 200, -32601, 'Method not found.', null, $id);

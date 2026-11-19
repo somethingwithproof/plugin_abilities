@@ -199,4 +199,58 @@ check(mcp_request_headers(['HTTP_MCP_PROTOCOL_VERSION' => '2026-07-28', 'HTTP_MC
 	'REQUEST_METHOD' => 'POST', 'CONTENT_TYPE' => 'application/json', 'HTTP_BAD' => ['x'], 'HTTP_X_ONE' => '1'])
 	=== ['mcp-protocol-version' => '2026-07-28', 'mcp-name' => 'x', 'origin' => 'https://a', 'x-one' => '1'], 'request headers');
 
+// fix round 1
+$throwing = new AbilitiesRegistry();
+$throwing->registerCategory('fixtures', 'Fixtures');
+$schema = ['type' => 'object', 'properties' => [], 'additionalProperties' => false];
+$throwing->register('fixture-throwing-thing', ['label' => 'T', 'description' => 'd', 'category' => 'fixtures',
+	'input_schema' => $schema, 'output_schema' => $schema,
+	'annotations' => ['readOnly' => true, 'destructive' => false, 'idempotent' => true],
+	'permission'  => function (int $user) { throw new RuntimeException('secret detail'); },
+	'execute'     => fn (int $user, stdClass $args) => []]);
+$principal = ['token_id' => 1, 'token_kind' => 'pat', 'user_id' => 7, 'scopes' => ['abilities:read']];
+$audit     = function () {};
+$info      = ['name' => 'cacti-mcp', 'version' => '0.1.0'];
+$r = mcp_rpc_handle('POST', [], '{"jsonrpc":"2.0","id":9,"method":"tools/list"}', $throwing, $principal, $audit, $info);
+check($r['status'] === 200 && $r['body']['error']['code'] === -32603 && $r['body']['id'] === 9
+	&& !str_contains(json_encode($r['body']), 'secret'), 'legacy throwing permission callback');
+$r = mcp_rpc_handle('POST', ['mcp-protocol-version' => '2026-07-28', 'mcp-method' => 'tools/list'],
+	json_encode(['jsonrpc' => '2.0', 'id' => 9, 'method' => 'tools/list', 'params' => ['_meta' => MODERN_META]]), $throwing, $principal, $audit, $info);
+check($r['status'] === 500 && $r['body']['error']['code'] === -32603 && $r['body']['id'] === 9
+	&& !str_contains(json_encode($r['body']), 'secret'), 'modern throwing permission callback');
+
+// legacy protocol version header
+$ping = ['jsonrpc' => '2.0', 'id' => 1, 'method' => 'ping'];
+foreach (['2025-11-25', '2025-06-18', '2025-03-26'] as $v) {
+	check(rpc($ping, ['mcp-protocol-version' => $v])['status'] === 200, 'accepted legacy header ' . $v);
+}
+$r = rpc($ping, ['mcp-protocol-version' => '2024-11-05']);
+check($r['status'] === 400 && $r['body']['error']['code'] === -32600 && $r['body']['id'] === 1 && $r['headers'] === [], 'unsupported legacy header');
+check(rpc(['method' => 'initialize'] + $ping, ['mcp-protocol-version' => '1900-01-01'])['status'] === 200, 'initialize exempt from header check');
+check(rpc($ping)['status'] === 200, 'absent header accepted');
+
+// status rule for legacy -32602
+$r = rpc('{"jsonrpc":"2.0","id":1,"method":"ping","params":[1]}');
+check($r['status'] === 200 && $r['body']['error']['code'] === -32602, 'legacy params not object is 200');
+$r = modern('tools/call', [], ['mcp-name' => 'x']);
+check($r['status'] === 400, 'modern call without name is rejected');
+
+// list result is never emitted as a JSON array
+$listy = new AbilitiesRegistry();
+$listy->registerCategory('fixtures', 'Fixtures');
+$listSchema = ['type' => 'object', 'properties' => ['0' => ['type' => 'integer']], 'additionalProperties' => false];
+$listy->register('fixture-list-thing', ['label' => 'L', 'description' => 'd', 'category' => 'fixtures',
+	'input_schema' => $schema, 'output_schema' => $listSchema,
+	'annotations' => ['readOnly' => true, 'destructive' => false, 'idempotent' => true],
+	'permission'  => fn (int $user) => true, 'execute' => fn (int $user, stdClass $args) => [5]]);
+$r = mcp_rpc_handle('POST', [], '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fixture-list-thing"}}', $listy, $principal, $audit, $info);
+check($r['body']['result']['isError'] === true && $r['body']['result']['structuredContent']['error']['status'] === 'INTERNAL'
+	&& !isset($r['body']['result']['structuredContent'][0]), 'list result rejected');
+
+// invalid base64 name and modern notification
+$r = modern('tools/call', ['name' => 'fixture-get-thing'], ['mcp-name' => '=?base64?###?=']);
+check($r['status'] === 400 && $r['body']['error']['code'] === -32020, 'invalid base64 mcp-name');
+$r = rpc(['jsonrpc' => '2.0', 'method' => 'notifications/x', 'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '1900-01-01']]]);
+check($r['status'] === 202 && $r['body'] === null, 'modern notification with unsupported version');
+
 echo "mcp tests passed\n";
