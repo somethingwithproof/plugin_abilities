@@ -84,7 +84,7 @@ do not exercise a complete Cacti installation.
 
 ## How it stays safe
 
-- Each request needs a valid scoped bearer token owned by an enabled Cacti user.
+- Each request needs a valid personal bearer token owned by an enabled Cacti user.
   The plugin realm, provider realms, and device permissions still apply.
 - Inputs must match a supported closed-object schema. Providers return bounded
   result objects, and the built-in inventory providers omit credentials.
@@ -163,7 +163,7 @@ git clone https://github.com/somethingwithproof/plugin_abilities.git abilities
    SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
    ```
 
-5. Create a scoped token with the CLI, then configure the Python adapter with
+5. Create a token with the CLI, then configure the Python adapter with
    the same token through your secret manager.
 
 The API retains Cacti's normal session and CSRF protection. Discovery returns a
@@ -173,20 +173,19 @@ Cookie authentication alone never grants API access.
 ## Command line
 
 Use an OS account authorized to administer this Cacti installation. Generate a
-random 256-bit token, retain it in your secret manager, and supply it through
+personal token (`cmcp_pat_` plus 64 lowercase hex characters), retain it in your secret manager, and supply it through
 `CACTI_MCP_TOKEN`. The CLI never prints the value or stores it in plaintext.
 
 ```console
-export CACTI_MCP_TOKEN="$(openssl rand -hex 32)"
+export CACTI_MCP_TOKEN="$(printf 'cmcp_pat_%s\n' "$(openssl rand -hex 32)")"
 # Store this value in your secret manager before ending this shell session.
-php plugins/abilities/tokens.php --create=mcp_reader \
-  --scopes=cacti.devices.list,cacti.devices.get --days=30
+php plugins/abilities/tokens.php --create=mcp_reader --days=30
 php plugins/abilities/tokens.php --list
 php plugins/abilities/tokens.php --revoke=1
 ```
 
-Creation validates the enabled user, plugin realm, and current permission for
-every named scope. Expiry is mandatory, defaults to 30 days, and is capped at
+Creation validates the enabled user and plugin realm. Every token carries the
+single `abilities:read` scope; Cacti realms decide what each user can see. Expiry is mandatory, defaults to 30 days, and is capped at
 90 days. Wildcards are unsupported. Rotation creates a new token and revokes
 the old token ID. Revocation and disabled users take effect on the next request.
 

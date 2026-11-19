@@ -46,11 +46,15 @@ function mcp_has_realm(int $userId) : bool {
 	return $id !== false && (int) $id > 0 && is_realm_allowed((int) $id + 100, $userId);
 }
 
+function mcp_token_hash(string $token) : ?string {
+	return preg_match('/^cmcp_pat_[a-f0-9]{64}$/D', $token) === 1 ? hash('sha256', $token) : null;
+}
+
 function mcp_authenticate(string $header) : array {
-	if (!preg_match('/^Bearer ([a-f0-9]{64})$/D', $header, $matches)) {
+	if (!preg_match('/^Bearer (cmcp_pat_[a-f0-9]{64})$/D', $header, $matches)) {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
-	$hash = hash('sha256', $matches[1]);
+	$hash = mcp_token_hash($matches[1]);
 	$row  = db_fetch_row_prepared('SELECT t.id, t.user_id, t.token_hash, t.scopes
 		FROM plugin_mcp_token AS t
 		JOIN user_auth AS u ON u.id = t.user_id
@@ -65,13 +69,13 @@ function mcp_authenticate(string $header) : array {
 	if (!mcp_has_realm($userId)) {
 		throw new AbilitiesError('PERMISSION_DENIED', 'REALM_REQUIRED');
 	}
-	$scopes = json_decode($row['scopes'], true, 16, JSON_THROW_ON_ERROR);
 
-	if (!is_array($scopes) || !array_is_list($scopes)) {
+	// Personal tokens carry exactly one scope; anything else is a corrupt or foreign row.
+	if (json_decode($row['scopes'], true, 16) !== ['abilities:read']) {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 
-	return ['token_id' => (int) $row['id'], 'user_id' => $userId, 'scopes' => $scopes];
+	return ['token_id' => (int) $row['id'], 'token_kind' => 'pat', 'user_id' => $userId, 'scopes' => ['abilities:read']];
 }
 
 function mcp_audit(array $principal, string $id, string $name, string $outcome) : void {

@@ -18,7 +18,7 @@ try {
 	}
 	$authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 
-	if (!preg_match('/^Bearer [a-f0-9]{64}$/D', $authorization)) {
+	if (!preg_match('/^Bearer cmcp_pat_[a-f0-9]{64}$/D', $authorization)) {
 		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 

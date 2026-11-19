@@ -46,6 +46,7 @@ jobs:
               php tests/providers.php
               php tests/realm.php
               php tests/aip.php
+              php tests/storage.php
             '
 
   package:

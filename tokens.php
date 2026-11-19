@@ -7,19 +7,21 @@ if (PHP_SAPI !== 'cli') {
 	exit;
 }
 
-$options = getopt('', ['create:', 'scopes:', 'days:', 'revoke:', 'list', 'help']);
+$options = getopt('', ['create:', 'days:', 'revoke:', 'list', 'help']);
 
 if (isset($options['help']) || !$options) {
-	print "Usage: php tokens.php --create=USERNAME --scopes=NAME,NAME --days=30\n"
+	print "Usage: php tokens.php --create=USERNAME --days=30\n"
 		. "       php tokens.php --revoke=ID | --list\n"
-		. "Creation reads a random 64-character lowercase hex token from CACTI_MCP_TOKEN.\n"
+		. "Creation reads a token of the form cmcp_pat_ plus 64 lowercase hex characters from\n"
+		. "CACTI_MCP_TOKEN. Generate one with:\n"
+		. "  printf 'cmcp_pat_%s\\n' \"$(openssl rand -hex 32)\"\n"
+		. "Tokens carry the abilities:read scope. Cacti realms decide what each user can see.\n"
 		. "Only its SHA-256 hash is stored. Token values are never printed.\n";
 	exit;
 }
 
 require __DIR__ . '/../../include/cli_check.php';
 require_once __DIR__ . '/lib/storage.php';
-require_once __DIR__ . '/lib/providers.php';
 
 try {
 	if (!api_plugin_is_enabled('mcp') || (int) $config['poller_id'] !== 1) {
@@ -45,9 +47,10 @@ try {
 		print "Token revoked.\n";
 	} else {
 		$token = getenv('CACTI_MCP_TOKEN');
-		$days  = filter_var($options['days'] ?? 30, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 90]]);
+		$days = filter_var($options['days'] ?? 30, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 90]]);
+		$hash = is_string($token) ? mcp_token_hash($token) : null;
 
-		if (!is_string($token) || !preg_match('/^[a-f0-9]{64}$/D', $token) || $days === false) {
+		if ($hash === null || $days === false) {
 			throw new RuntimeException('Supply CACTI_MCP_TOKEN and an expiry of 1 to 90 days');
 		}
 		$user = (int) db_fetch_cell_prepared('SELECT id FROM user_auth WHERE username = ? AND enabled = ?', [$options['create'], 'on']);
@@ -55,25 +58,22 @@ try {
 		if ($user <= 0 || !mcp_has_realm($user)) {
 			throw new RuntimeException('User must be enabled and granted the MCP and Abilities API realm');
 		}
-		$scopes    = explode(',', $options['scopes'] ?? '');
-		$available = array_column(mcp_registry()->discover(['user_id' => $user, 'scopes' => $scopes]), 'name');
-
-		if (!$available || array_diff($scopes, $available) || count(array_unique($scopes)) !== count($scopes)) {
-			throw new RuntimeException('Every scope must name an ability currently permitted for this user');
-		}
-		$hash = hash('sha256', $token);
 
 		if (db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash])) {
 			throw new RuntimeException('Token already exists; generate a new value');
 		}
 
 		if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at) VALUES (?, ?, ?, ?)',
-			[$user, $hash, json_encode($scopes, JSON_THROW_ON_ERROR), time() + $days * 86400])) {
+			[$user, $hash, '["abilities:read"]', time() + $days * 86400])) {
 			throw new RuntimeException('Token creation failed');
 		}
 		$id = db_fetch_cell_prepared('SELECT id FROM plugin_mcp_token WHERE token_hash = ?', [$hash]);
 		print 'Created token ID ' . $id . PHP_EOL;
 	}
+} catch (AbilitiesError $error) {
+	// AbilitiesError carries no message by default; print its reason code only.
+	fwrite(STDERR, 'Token command failed: ' . $error->reason . PHP_EOL);
+	exit(1);
 } catch (Throwable $error) {
 	fwrite(STDERR, $error instanceof RuntimeException ? $error->getMessage() . PHP_EOL : "Token command failed.\n");
 	exit(1);
