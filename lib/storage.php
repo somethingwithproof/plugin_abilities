@@ -248,19 +248,24 @@ function mcp_token_list(array $filter, int $page, int $rows) : array {
 
 /**
  * Create a personal token for a user. The value is returned once; only its hash is stored.
+ * $token is for the CLI, which takes the value from its environment instead of generating one.
  *
  * @throws InvalidArgumentException for a bad user ID or lifetime
  * @throws RuntimeException when the row cannot be stored
  */
-function mcp_token_create(int $userId, int $days, ?int $createdBy = null) : string {
+function mcp_token_create(int $userId, int $days, ?int $createdBy = null, ?string $token = null) : string {
 	$createdBy ??= $userId;
 
 	if ($userId < 1 || $createdBy < 1 || $days < 1 || $days > 365) {
 		throw new InvalidArgumentException('Invalid token owner or lifetime');
 	}
 	mcp_token_assert_eligible($userId);
-	$token = 'cmcp_pat_' . bin2hex(random_bytes(32));
-	$now   = time();
+	$token ??= 'cmcp_pat_' . bin2hex(random_bytes(32));
+
+	if (mcp_token_hash($token) === null) {
+		throw new InvalidArgumentException('Invalid token value');
+	}
+	$now = time();
 
 	if (!db_execute_prepared('INSERT INTO plugin_mcp_token (user_id, token_hash, scopes, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
 		[$userId, mcp_token_hash($token), '["abilities:read"]', $now + $days * 86400, $now, $createdBy])) {
@@ -307,8 +312,8 @@ function mcp_token_eligible(array $user, int $guestUserId) : bool {
  * @throws InvalidArgumentException for an ineligible owner or a bad lifetime
  * @throws RuntimeException when the token or its audit row cannot be stored
  */
-function mcp_token_create_audited(int $userId, int $days, int $actor) : string {
-	$token = mcp_token_create($userId, $days, $actor);
+function mcp_token_create_audited(int $userId, int $days, int $actor, ?string $token = null) : string {
+	$token = mcp_token_create($userId, $days, $actor, $token);
 	$id    = mcp_token_id($token);
 
 	try {

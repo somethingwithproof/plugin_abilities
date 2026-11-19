@@ -274,6 +274,13 @@ throws(fn () => mcp_token_create_audited(2, 30, 2), RuntimeException::class);
 check(count($tokens) === $before + 1 && end($tokens)['revoked'] === '1', 'A token whose audit write fails is revoked and not returned');
 $failAudit = false;
 
+// the CLI supplies its own value; it is stored and audited like a generated one
+$audit    = [];
+$supplied = 'cmcp_pat_' . str_repeat('cd', 32);
+check(mcp_token_create_audited(2, 365, 2, $supplied) === $supplied && end($tokens)['token_hash'] === hash('sha256', $supplied), 'A supplied value is stored by its hash');
+check($audit === [['token_id' => count($tokens), 'user_id' => 2, 'ability' => 'mcp-token-create', 'outcome' => 'succeeded']], 'A supplied token is audited');
+throws(fn () => mcp_token_create_audited(2, 30, 2, 'not-a-token'), InvalidArgumentException::class);
+
 // a token whose ID cannot be found is revoked by value, not left active and never shown
 $hideTokenIds = true;
 $before       = count($tokens);

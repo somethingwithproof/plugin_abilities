@@ -202,8 +202,9 @@ Tokens are always created for a user, expire, and can be revoked:
   tokens; see below.
 - **Command line.** `tokens.php` runs only from the CLI, as an OS account that can
   administer Cacti. It takes the token from the environment so the value never
-  appears on a command line or in the process list. Lifetime is 1 to 90 days and
-  defaults to 30.
+  appears on a command line or in the process list. Lifetime is 1 to 365 days and
+  defaults to 30. Creating and revoking a token through the CLI is audited like the
+  console, with the token's owner as the actor because the CLI has no Cacti user.
 
   ```console
   export CACTI_MCP_TOKEN="$(printf 'cmcp_pat_%s\n' "$(openssl rand -hex 32)")"
@@ -448,11 +449,11 @@ The rules, all enforced at registration:
   associative array that matches `output_schema` exactly; a list, an extra field,
   or more than 1 MB of JSON becomes an `INVALID_RESULT` error. Throw
   `AbilitiesError` for a client-visible failure, such as `NOT_FOUND`.
-- **Empty objects.** PHP encodes `[]` as a JSON array. A top-level empty result may
-  be `[]`, and the registry treats it as an empty object. A nested field whose
-  schema is `object` and that may be empty must be `new stdClass()`; `[]` there
-  fails validation with `INVALID_RESULT`. Use `new stdClass()` for an empty
-  `properties` map in schemas too, so the schema encodes as an object.
+- **Empty objects.** PHP encodes `[]` as a JSON array. Wherever the output schema
+  declares an `object`, at any depth, the registry treats `[]` as the empty object
+  and sends `{}`; `new stdClass()` works too. A non-empty list never counts as an
+  object and fails with `INVALID_RESULT`. An empty `properties` map in a schema
+  may be `[]` or `new stdClass()`; both are published as `{}`.
 - **Failure isolation.** Each plugin registers into a scratch copy that is kept
   only if your function returns normally. If it throws, none of your abilities
   register, and the failure is logged.
