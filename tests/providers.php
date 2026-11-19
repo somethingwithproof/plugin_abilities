@@ -41,35 +41,43 @@ function get_allowed_devices($sql_where = '', $sql_order = 'description', $sql_l
 
 function api_plugin_hook_function($name, $parm = null) {
 	check($name === 'abilities_register', 'Native extension hook');
-	$parm->register('fixture.version', 'Installed provider', [
-		'type' => 'object', 'properties' => new stdClass(), 'additionalProperties' => false
-	], fn ($user) => $user === 7, fn () => ['version' => 'fixture']);
+	$parm->registerCategory('fixtures', 'Fixtures');
+	$parm->register('cacti-fixture-version', [
+		'label'         => 'Fixture version',
+		'description'   => 'Installed provider',
+		'category'      => 'fixtures',
+		'input_schema'  => ['type' => 'object', 'properties' => new stdClass(), 'additionalProperties' => false],
+		'output_schema' => ['type' => 'object', 'properties' => ['version' => ['type' => 'string']], 'required' => ['version'], 'additionalProperties' => false],
+		'annotations'   => ['readOnly' => true, 'destructive' => false, 'idempotent' => true],
+		'permission'    => fn ($user) => $user === 7,
+		'execute'       => fn () => ['version' => 'fixture']
+	]);
 
 	return $parm;
 }
 
 $registry  = mcp_registry();
-$principal = ['user_id' => 7, 'scopes' => ['cacti.system.info', 'cacti.devices.list', 'cacti.devices.get', 'fixture.version']];
+$principal = ['token_id' => 1, 'token_kind' => 'pat', 'user_id' => 7, 'scopes' => ['abilities:read']];
 $audit     = function ($id, $name, $outcome) {};
 check(count($registry->discover($principal)) === 4, 'Built-in and hook providers must be discoverable');
-check($registry->discover(['user_id' => 8, 'scopes' => $principal['scopes']]) === [], 'Provider realm isolation');
-$result = $registry->execute($principal, 'cacti.system.info', new stdClass(), $audit);
-check($result['result']->pluginVersion === plugin_mcp_version()['version'], 'Reported version must come from INFO');
-$result = $registry->execute($principal, 'cacti.devices.list', (object) ['limit' => 1], $audit);
-check($result['result']->nextOffset === 1 && $result['result']->devices[0]['id'] === 1, 'Native pagination');
-check(array_keys($result['result']->devices[0]) === ['id', 'description', 'hostname', 'disabled', 'status'], 'Provider must return only allowed fields');
-$result = $registry->execute($principal, 'cacti.devices.list', (object) ['limit' => 2, 'offset' => 1], $audit);
-check($result['result']->nextOffset === null && $result['result']->devices[0]['disabled'] === true, 'Final page and disabled state');
-$result = $registry->execute($principal, 'cacti.devices.get', (object) ['id' => 2], $audit);
-check($result['result']->device['id'] === 2 && end($calls) === ['1', 7, 2], 'Native single-device lookup');
+check($registry->discover(['user_id' => 8] + $principal) === [], 'Provider realm isolation');
+$result = $registry->execute($principal, 'cacti-get-system-info', new stdClass(), $audit);
+check($result['result']['pluginVersion'] === plugin_mcp_version()['version'], 'Reported version must come from INFO');
+$result = $registry->execute($principal, 'cacti-list-devices', (object) ['limit' => 1], $audit);
+check($result['result']['nextOffset'] === 1 && $result['result']['devices'][0]['id'] === 1, 'Native pagination');
+check(array_keys($result['result']['devices'][0]) === ['id', 'description', 'hostname', 'disabled', 'status'], 'Provider must return only allowed fields');
+$result = $registry->execute($principal, 'cacti-list-devices', (object) ['limit' => 2, 'offset' => 1], $audit);
+check($result['result']['nextOffset'] === null && $result['result']['devices'][0]['disabled'] === true, 'Final page and disabled state');
+$result = $registry->execute($principal, 'cacti-get-device', (object) ['id' => 2], $audit);
+check($result['result']['device']['id'] === 2 && end($calls) === ['1', 7, 2], 'Native single-device lookup');
 
 try {
-	$registry->execute($principal, 'cacti.devices.get', (object) ['id' => 99], $audit);
+	$registry->execute($principal, 'cacti-get-device', (object) ['id' => 99], $audit);
 
 	throw new LogicException('An unavailable device must be rejected');
 } catch (AbilitiesError $error) {
 	check($error->reason === 'DEVICE_NOT_FOUND', 'Unavailable device error');
 }
-$result = $registry->execute($principal, 'fixture.version', new stdClass(), $audit);
-check($result['result']->version === 'fixture', 'Installed hook provider execution');
+$result = $registry->execute($principal, 'cacti-fixture-version', new stdClass(), $audit);
+check($result['result']['version'] === 'fixture', 'Installed hook provider execution');
 print "Native provider permissions, pagination, metadata, and extension checks passed.\n";
