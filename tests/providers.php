@@ -68,7 +68,7 @@ try {
 
 	throw new LogicException('An unavailable device must be rejected');
 } catch (AbilitiesError $error) {
-	check($error->errorCode === 'device_unavailable', 'Unavailable device error');
+	check($error->reason === 'DEVICE_NOT_FOUND', 'Unavailable device error');
 }
 $result = $registry->execute($principal, 'fixture.version', new stdClass(), $audit);
 check($result['result']->version === 'fixture', 'Installed hook provider execution');

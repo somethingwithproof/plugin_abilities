@@ -14,16 +14,16 @@ try {
 	if (!in_array($method, ['GET', 'POST'], true)) {
 		header('Allow: GET, POST');
 
-		throw new AbilitiesError(405, 'method_not_allowed');
+		throw new AbilitiesError('INVALID_ARGUMENT', 'METHOD_NOT_ALLOWED', '', [], 405);
 	}
 	$authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 
 	if (!preg_match('/^Bearer [a-f0-9]{64}$/D', $authorization)) {
-		throw new AbilitiesError(401, 'invalid_token');
+		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 
 	if ((int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 65536) {
-		throw new AbilitiesError(413, 'request_too_large');
+		throw new AbilitiesError('INVALID_ARGUMENT', 'REQUEST_TOO_LARGE', '', [], 413);
 	}
 	// Cacti handles its normal session and CSRF checks, including POST failures.
 	$bufferLevel = ob_get_level();
@@ -39,7 +39,7 @@ try {
 	require_once __DIR__ . '/lib/providers.php';
 
 	if (!api_plugin_is_enabled('mcp') || (int) $config['poller_id'] !== 1) {
-		throw new AbilitiesError(503, 'plugin_unavailable');
+		throw new AbilitiesError('UNAVAILABLE', 'PLUGIN_UNAVAILABLE');
 	}
 	// Browser session identity never grants API access. All helpers get this UID.
 	$principal = mcp_authenticate($authorization);
@@ -52,32 +52,32 @@ try {
 		$contentType = explode(';', $_SERVER['CONTENT_TYPE'] ?? '')[0];
 
 		if ($contentType !== 'application/x-www-form-urlencoded') {
-			throw new AbilitiesError(415, 'unsupported_media_type');
+			throw new AbilitiesError('INVALID_ARGUMENT', 'UNSUPPORTED_MEDIA_TYPE', '', [], 415);
 		}
 		$input = $_POST['request'] ?? '';
 
 		if (!is_string($input) || strlen($input) > 16384) {
-			throw new AbilitiesError(400, 'invalid_request');
+			throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_REQUEST');
 		}
 
 		try {
 			$request = json_decode($input, false, 16, JSON_THROW_ON_ERROR);
 		} catch (JsonException $error) {
-			throw new AbilitiesError(400, 'invalid_request');
+			throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_REQUEST');
 		}
 
 		if (!$request instanceof stdClass || !is_string($request->name ?? null)
 			|| !($request->arguments ?? null) instanceof stdClass
 			|| array_diff(array_keys(get_object_vars($request)), ['name', 'arguments'])) {
-			throw new AbilitiesError(400, 'invalid_request');
+			throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_REQUEST');
 		}
 		$response = $registry->execute($principal, $request->name, $request->arguments,
 			fn ($id, $name, $outcome) => mcp_audit($principal, $id, $name, $outcome));
 	}
 	print json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
 } catch (Throwable $error) {
-	$status = $error instanceof AbilitiesError ? $error->status : 500;
-	$code   = $error instanceof AbilitiesError ? $error->errorCode : 'internal_error';
+	$status = $error instanceof AbilitiesError ? $error->httpStatus() : 500;
+	$code   = $error instanceof AbilitiesError ? $error->reason : 'INTERNAL_ERROR';
 	http_response_code($status);
 
 	if ($status === 401) {

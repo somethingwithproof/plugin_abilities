@@ -49,7 +49,7 @@ function mcp_registry() : AbilitiesRegistry {
 		$rows  = get_allowed_devices('', 'h1.id', '1', $total, $user, $args->id);
 
 		if (!$rows) {
-			throw new AbilitiesError(404, 'device_unavailable');
+			throw new AbilitiesError('NOT_FOUND', 'DEVICE_NOT_FOUND');
 		}
 
 		return ['device' => mcp_device_fields(reset($rows))];

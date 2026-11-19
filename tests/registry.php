@@ -14,7 +14,7 @@ function rejects(callable $action, string $code) : void {
 	try {
 		$action();
 	} catch (AbilitiesError $error) {
-		check($error->errorCode === $code, 'Unexpected error');
+		check($error->reason === $code, 'Unexpected error');
 
 		return;
 	}
@@ -42,20 +42,20 @@ check($registry->discover(['user_id' => 7, 'scopes' => ['*']]) === [], 'No wildc
 $result = $registry->execute($principal, 'fixture.read', (object) ['id' => 2], $audit);
 check($result['result']->id === 2 && $calls === 1 && $events === ['started', 'succeeded'], 'Successful audit');
 $allowed = false;
-rejects(fn () => $registry->execute($principal, 'fixture.read', (object) ['id' => 2], $audit), 'ability_unavailable');
+rejects(fn () => $registry->execute($principal, 'fixture.read', (object) ['id' => 2], $audit), 'ABILITY_UNAVAILABLE');
 $allowed = true;
 
 foreach ([(object) [], (object) ['id' => '2'], (object) ['id' => true], (object) ['id' => 0], (object) ['id' => 101], (object) ['id' => 2, 'extra' => 1]] as $args) {
-	rejects(fn () => $registry->execute($principal, 'fixture.read', $args, $audit), 'invalid_arguments');
+	rejects(fn () => $registry->execute($principal, 'fixture.read', $args, $audit), 'INVALID_ARGUMENTS');
 }
 check($calls === 1, 'Invalid calls must not execute');
-$badAudit = function () { throw new AbilitiesError(503, 'audit_unavailable'); };
-rejects(fn () => $registry->execute($principal, 'fixture.read', (object) ['id' => 2], $badAudit), 'audit_unavailable');
+$badAudit = function () { throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE'); };
+rejects(fn () => $registry->execute($principal, 'fixture.read', (object) ['id' => 2], $badAudit), 'AUDIT_UNAVAILABLE');
 check($calls === 1, 'Audit outage must prevent execution');
 $registry->register('fixture.fail', 'Failure', $schema, fn () => true,
-	function () { throw new AbilitiesError(404, 'device_unavailable'); });
+	function () { throw new AbilitiesError('NOT_FOUND', 'DEVICE_NOT_FOUND'); });
 $principal['scopes'][] = 'fixture.fail';
-rejects(fn () => $registry->execute($principal, 'fixture.fail', (object) ['id' => 2], $audit), 'device_unavailable');
+rejects(fn () => $registry->execute($principal, 'fixture.fail', (object) ['id' => 2], $audit), 'DEVICE_NOT_FOUND');
 check(array_slice($events, -2) === ['started', 'failed'], 'Failure audit');
 
 try {
@@ -65,9 +65,9 @@ try {
 } catch (LogicException $expected) {
 }
 abilities_validate('é', ['type' => 'string', 'maxLength' => 1, 'enum' => ['é']]);
-rejects(fn () => abilities_validate('éé', ['type' => 'string', 'maxLength' => 1]), 'invalid_arguments');
-rejects(fn () => abilities_validate('other', ['type' => 'string', 'enum' => ['one']]), 'invalid_arguments');
-rejects(fn () => abilities_validate([], ['type' => 'object']), 'invalid_arguments');
+rejects(fn () => abilities_validate('éé', ['type' => 'string', 'maxLength' => 1]), 'INVALID_ARGUMENTS');
+rejects(fn () => abilities_validate('other', ['type' => 'string', 'enum' => ['one']]), 'INVALID_ARGUMENTS');
+rejects(fn () => abilities_validate([], ['type' => 'object']), 'INVALID_ARGUMENTS');
 abilities_validate(true, ['type' => 'boolean']);
-rejects(fn () => abilities_validate(1, ['type' => 'boolean']), 'invalid_arguments');
+rejects(fn () => abilities_validate(1, ['type' => 'boolean']), 'INVALID_ARGUMENTS');
 print "Registry authorization, schema, and audit checks passed.\n";

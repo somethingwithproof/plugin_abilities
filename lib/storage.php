@@ -48,7 +48,7 @@ function mcp_has_realm(int $userId) : bool {
 
 function mcp_authenticate(string $header) : array {
 	if (!preg_match('/^Bearer ([a-f0-9]{64})$/D', $header, $matches)) {
-		throw new AbilitiesError(401, 'invalid_token');
+		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 	$hash = hash('sha256', $matches[1]);
 	$row  = db_fetch_row_prepared('SELECT t.id, t.user_id, t.token_hash, t.scopes
@@ -58,17 +58,17 @@ function mcp_authenticate(string $header) : array {
 		[$hash, time(), 'on']);
 
 	if (!$row || !hash_equals($row['token_hash'], $hash)) {
-		throw new AbilitiesError(401, 'invalid_token');
+		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 	$userId = (int) $row['user_id'];
 
 	if (!mcp_has_realm($userId)) {
-		throw new AbilitiesError(403, 'realm_required');
+		throw new AbilitiesError('PERMISSION_DENIED', 'REALM_REQUIRED');
 	}
 	$scopes = json_decode($row['scopes'], true, 16, JSON_THROW_ON_ERROR);
 
 	if (!is_array($scopes) || !array_is_list($scopes)) {
-		throw new AbilitiesError(401, 'invalid_token');
+		throw new AbilitiesError('UNAUTHENTICATED', 'INVALID_TOKEN');
 	}
 
 	return ['token_id' => (int) $row['id'], 'user_id' => $userId, 'scopes' => $scopes];
@@ -85,6 +85,6 @@ function mcp_audit(array $principal, string $id, string $name, string $outcome) 
 	}
 
 	if (!$ok) {
-		throw new AbilitiesError(503, 'audit_unavailable');
+		throw new AbilitiesError('UNAVAILABLE', 'AUDIT_UNAVAILABLE');
 	}
 }

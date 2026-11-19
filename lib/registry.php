@@ -3,8 +3,35 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 class AbilitiesError extends RuntimeException {
-	public function __construct(public int $status, public string $errorCode) {
-		parent::__construct($errorCode);
+	private const HTTP_CODES = [
+		'INVALID_ARGUMENT'    => 400,
+		'FAILED_PRECONDITION' => 400,
+		'OUT_OF_RANGE'        => 400,
+		'UNAUTHENTICATED'     => 401,
+		'PERMISSION_DENIED'   => 403,
+		'NOT_FOUND'           => 404,
+		'ALREADY_EXISTS'      => 409,
+		'ABORTED'             => 409,
+		'RESOURCE_EXHAUSTED'  => 429,
+		'UNIMPLEMENTED'       => 501,
+		'UNAVAILABLE'         => 503,
+		'INTERNAL'            => 500,
+	];
+
+	/**
+	 * @param string $status     A google.rpc.Code name.
+	 * @param string $reason     UPPER_SNAKE_CASE ErrorInfo reason.
+	 * @param string $message    Developer facing text; empty selects the default for the reason.
+	 * @param array  $violations List of ['field' => string, 'description' => string].
+	 * @param ?int   $httpCode   Overrides the HTTP status implied by $status.
+	 */
+	public function __construct(public string $status, public string $reason, string $message = '',
+		public array $violations = [], public ?int $httpCode = null) {
+		parent::__construct($message);
+	}
+
+	public function httpStatus() : int {
+		return $this->httpCode ?? self::HTTP_CODES[$this->status] ?? 500;
 	}
 }
 
@@ -47,7 +74,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 		|| ($type === 'boolean' && is_bool($value));
 
 	if (!$valid) {
-		throw new AbilitiesError(400, 'invalid_arguments');
+		throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 	}
 
 	if ($type === 'object') {
@@ -55,13 +82,13 @@ function abilities_validate(mixed $value, array $schema) : void {
 
 		foreach ($schema['required'] ?? [] as $name) {
 			if (!property_exists($value, $name)) {
-				throw new AbilitiesError(400, 'invalid_arguments');
+				throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 			}
 		}
 
 		foreach (get_object_vars($value) as $name => $item) {
 			if (!array_key_exists($name, $properties)) {
-				throw new AbilitiesError(400, 'invalid_arguments');
+				throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 			}
 			abilities_validate($item, $properties[$name]);
 		}
@@ -69,7 +96,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 
 	if ($type === 'integer' && ($value < ($schema['minimum'] ?? PHP_INT_MIN)
 		|| $value > ($schema['maximum'] ?? PHP_INT_MAX))) {
-		throw new AbilitiesError(400, 'invalid_arguments');
+		throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 	}
 
 	if ($type === 'string') {
@@ -77,7 +104,7 @@ function abilities_validate(mixed $value, array $schema) : void {
 
 		if ($length === false || $length < ($schema['minLength'] ?? 0) || $length > ($schema['maxLength'] ?? 4096)
 			|| (isset($schema['enum']) && !in_array($value, $schema['enum'], true))) {
-			throw new AbilitiesError(400, 'invalid_arguments');
+			throw new AbilitiesError('INVALID_ARGUMENT', 'INVALID_ARGUMENTS');
 		}
 	}
 }
@@ -116,7 +143,7 @@ class AbilitiesRegistry {
 		$entry = $this->entries[$name] ?? null;
 
 		if ($entry === null || !$this->allowed($entry, $principal)) {
-			throw new AbilitiesError(403, 'ability_unavailable');
+			throw new AbilitiesError('PERMISSION_DENIED', 'ABILITY_UNAVAILABLE');
 		}
 		abilities_validate($arguments, $entry['schema']);
 		$id = bin2hex(random_bytes(16));
@@ -126,7 +153,7 @@ class AbilitiesRegistry {
 			$result = ($entry['execute'])($principal['user_id'], $arguments);
 
 			if (!is_array($result) || strlen(json_encode($result, JSON_THROW_ON_ERROR)) > 1000000) {
-				throw new AbilitiesError(500, 'invalid_result');
+				throw new AbilitiesError('INTERNAL', 'INVALID_RESULT');
 			}
 		} catch (Throwable $error) {
 			$audit($id, $name, 'failed');
