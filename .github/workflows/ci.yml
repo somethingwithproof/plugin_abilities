@@ -51,6 +51,7 @@ jobs:
               php tests/api.php
               php tests/contract.php
               php tests/origin.php
+              php tests/mcp.php
             '
 
   package:
