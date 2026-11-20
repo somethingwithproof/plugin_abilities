@@ -10,7 +10,7 @@
 # argument it builds one from HEAD the way ci.yml does. KEEP=1 leaves the stack
 # running for debugging; otherwise everything, volumes included, is removed.
 #
-# Phases, in order: clone, build, install, plugin, checks, inspector, db-down, logs.
+# Phases, in order: clone, build, install, plugin, checks, d3, inspector, db-down, logs.
 # It prints "PHASE <name>" before each and "FAILED PHASE <name>" for the one that
 # fails. A setup phase failure stops the run; the later check phases each run even
 # if an earlier one failed, so one run reports as much as it can.
@@ -180,16 +180,55 @@ phase_plugin() {
 }
 
 phase_checks() {
-	compose run --rm -T checks php /checks/checks.php --ref="$ref" --phase=smoke 2>&1 | tee "$out/checks.log"
-	compose run --rm -T checks php /checks/checks.php --ref="$ref" --phase=main 2>&1 | tee -a "$out/checks.log"
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=smoke 2>&1 | tee "$out/checks.log"
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=main 2>&1 | tee -a "$out/checks.log"
 }
 
 phase_inspector() {
 	echo "inspector: not implemented yet"
 }
 
+# D3: sessions opened before guest_user changes must not be able to create a token for it.
+# guest-off runs whatever happens, so the later phases see a normal guest setting.
+phase_d3() {
+	local rc=0 before after
+	before="$(setup count-tokens guestu | tr -d '\r\n')"
+	[[ "$before" =~ ^[0-9]+$ ]] || { echo "FAIL D3 count: could not count guestu's tokens" >&2; return 1; }
+
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=d3-open 2>&1 | tee -a "$out/checks.log" || rc=1
+	in_web sh -c "printf '{\"guestu\": %s}' $before > /run/mcp-it/d3-before.json" || rc=1
+	setup guest-on || rc=1
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=d3-finish 2>&1 | tee -a "$out/checks.log" || rc=1
+	after="$(setup count-tokens guestu | tr -d '\r\n')" || rc=1
+	setup guest-off || rc=1
+	in_web rm -f /run/mcp-it/d3-before.json
+
+	if [[ "$after" =~ ^[0-9]+$ ]] && [ "$after" -le "$before" ]; then
+		echo "PASS D3 token rows for guestu unchanged ($before)" | tee -a "$out/checks.log"
+	else
+		echo "FAIL D3 token rows for guestu: before $before, after ${after:-unknown}" | tee -a "$out/checks.log"
+		rc=1
+	fi
+	return "$rc"
+}
+
+# D2: stop the database, check both endpoints, and start it again even if a check fails.
 phase_db_down() {
-	echo "db-down: not implemented yet"
+	local rc=0 i status=""
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-down-prep 2>&1 | tee -a "$out/checks.log" || rc=1
+	compose stop db
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-down 2>&1 | tee -a "$out/checks.log" || rc=1
+	compose start db
+
+	for i in $(seq 1 60); do
+		status="$(docker inspect -f '{{.State.Health.Status}}' "$(compose ps -q db)" 2> /dev/null || true)"
+		[ "$status" = healthy ] && break
+		sleep 2
+	done
+	[ "$status" = healthy ] || { echo "FAIL D2 the database did not become healthy again" | tee -a "$out/checks.log"; return 1; }
+
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-up 2>&1 | tee -a "$out/checks.log" || rc=1
+	return "$rc"
 }
 
 phase_logs() {
@@ -208,6 +247,7 @@ phase_plugin
 
 # Check phases.
 soft_phase checks
+soft_phase d3
 soft_phase inspector
 soft_phase db-down
 soft_phase logs

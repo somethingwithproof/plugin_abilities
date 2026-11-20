@@ -194,6 +194,8 @@ cmd_guest() {
 
 cmd_count_tokens() {
 	local user="${1:?usage: count-tokens <username>}"
+	# The name goes into SQL, so only the fixture users' kind of name is accepted.
+	[[ "$user" =~ ^[a-z0-9_]+$ ]] || { echo "invalid username" >&2; return 2; }
 	sql -e "SELECT COUNT(*) FROM plugin_mcp_token WHERE user_id = (SELECT id FROM user_auth WHERE username = '$user')"
 }
 

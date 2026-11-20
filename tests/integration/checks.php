@@ -6,7 +6,7 @@
  * this in the checks container, which shares the web container's network so the
  * address http://localhost/cacti matches the Public Cacti URL.
  *
- * Usage: php checks.php --ref=<1.2.31|develop> --phase=<smoke|main|d3-open|d3-finish|db-down|db-up>
+ * Usage: php checks.php --ref=<1.2.31|develop> --phase=<smoke|main|d3-open|d3-finish|db-down-prep|db-down|db-up>
  *
  * Every check prints PASS or FAIL and the script keeps going after a failure.
  * Reasons carry statuses and field names only, never a token or a header value
@@ -211,29 +211,71 @@ function tool_names(array $response) : array|string {
 	return $names;
 }
 
-/** The hidden CSRF input of a rendered form, found by what it is rather than by a fixed name. @return array{0: string, 1: string} name and value */
-function csrf_field(string $html) : array {
+/**
+ * The value of one attribute in an HTML tag, or null. The name is anchored so that
+ * `data-name=` or `xname=` is not mistaken for `name=`.
+ */
+function html_attr(string $tag, string $attribute) : ?string {
+	if (!preg_match('/(?<![\w-])' . preg_quote($attribute, '/') . '\s*=\s*([\'"])(.*?)\1/is', $tag, $match)) {
+		return null;
+	}
+
+	return html_entity_decode($match[2]);
+}
+
+/** Every hidden input of a page as [name, value] pairs, in document order. @return array<int, array{0: string, 1: string}> */
+function hidden_inputs(string $html) : array {
+	$found = [];
+
 	if (preg_match_all('/<input\b[^>]*>/i', $html, $inputs)) {
 		foreach ($inputs[0] as $input) {
-			if (!preg_match('/\btype\s*=\s*([\'"]?)hidden\1/i', $input)
-				|| !preg_match('/\bname\s*=\s*([\'"])([^\'"]*csrf[^\'"]*)\1/i', $input, $name)
-				|| !preg_match('/\bvalue\s*=\s*([\'"])(.*?)\1/is', $input, $value)) {
-				continue;
-			}
+			$name  = html_attr($input, 'name');
+			$value = html_attr($input, 'value');
 
-			return [$name[2], html_entity_decode($value[2])];
+			if (strtolower((string) html_attr($input, 'type')) === 'hidden' && $name !== null && $value !== null) {
+				$found[] = [$name, $value];
+			}
+		}
+	}
+
+	return $found;
+}
+
+/** The hidden CSRF input of a rendered form, found by what it is rather than by a fixed name. @return array{0: string, 1: string} name and value */
+function csrf_field(string $html) : array {
+	foreach (hidden_inputs($html) as [$name, $value]) {
+		if (stripos($name, 'csrf') !== false) {
+			return [$name, $value];
 		}
 	}
 
 	throw new RuntimeException('no CSRF token on page');
 }
 
+/** Temporary cookie jars made by web_login(), removed when the script ends. @var array<int, string> */
+$tempJars = [];
+
+register_shutdown_function(function () use (&$tempJars) {
+	foreach ($tempJars as $file) {
+		@unlink($file);
+	}
+});
+
 /**
  * Log in through the console login form and return the cookie jar path. Fails with a
- * clear reason when the form has no CSRF input or the login is refused. Check D3 reuses it.
+ * clear reason when the form has no CSRF input or the login is refused. Without $jar the
+ * jar is a temporary file removed when the script ends; with it the caller owns the file.
  */
-function web_login(string $user, string $passwordFile) : string {
-	$jar = tempnam(sys_get_temp_dir(), 'jar');
+function web_login(string $user, string $passwordFile, ?string $jar = null) : string {
+	global $tempJars;
+
+	if ($jar === null) {
+		$jar = tempnam(sys_get_temp_dir(), 'jar');
+		$tempJars[] = $jar;
+	} else {
+		file_put_contents($jar, '');
+		chmod($jar, 0600);
+	}
 	$page = http('GET', BASE . '/index.php', [], null, $jar);
 	[$csrfName, $csrfValue] = csrf_field($page['body']);
 
@@ -466,7 +508,17 @@ function phase_main(string $ref) : void {
 			}
 		}
 
-		return $denied['body'] === $unknown['body'] ? null : 'the two bodies differ';
+		// A per-request id may differ between two calls; everything else must match.
+		$strip = function (mixed $value) use (&$strip) {
+			if (!is_array($value)) {
+				return $value;
+			}
+			unset($value['requestId'], $value['request_id']);
+
+			return array_map($strip, $value);
+		};
+
+		return $strip(decode($denied)) === $strip(decode($unknown)) ? null : 'the two bodies differ';
 	});
 
 	check('C6b', 'apionly tools/call is an isError result', function () use ($apionly) {
@@ -543,12 +595,248 @@ function phase_main(string $ref) : void {
 	});
 }
 
+const REFUSAL_TEXT = 'Tokens cannot be created for the guest account or disabled users.';
+const D3_STATE     = SECRETS . '/d3-open.json';
+
+/** guestu's user id, from the fixtures. */
+function guestu_id() : int {
+	$ids = json_decode(secret('ids.json'), true, 8, JSON_THROW_ON_ERROR);
+
+	return (int) $ids['guestu'];
+}
+
+/** The value of one hidden input on a page, or null. */
+function hidden_value(string $html, string $name) : ?string {
+	foreach (hidden_inputs($html) as [$field, $value]) {
+		if ($field === $name) {
+			return $value;
+		}
+	}
+
+	return null;
+}
+
+/** The user ids offered by the User dropdown of the admin token form. @return array<int, int>|null null when there is no such dropdown */
+function user_dropdown_ids(string $html) : ?array {
+	if (!preg_match('/<select\b[^>]*(?<![\w-])(?:id|name)\s*=\s*[\'"]user_id[\'"][^>]*>(.*?)<\/select>/is', $html, $select)) {
+		return null;
+	}
+	preg_match_all('/<option\b[^>]*(?<![\w-])value\s*=\s*[\'"]?(\d+)/i', $select[1], $options);
+
+	return array_map('intval', $options[1]);
+}
+
+const D3_PAGES = [
+	'self'  => ['plugins/mcp/mcp_tokens.php', 'guestu', 'guestu-password', 'jar-guestu'],
+	'admin' => ['plugins/mcp/mcp_admin.php?tab=tokens', 'admin', 'admin-password', 'jar-admin'],
+];
+
+/** D3, first half: sign in as guestu and admin, open each token page, keep the sessions. */
+function phase_d3_open() : void {
+	$state = [];
+
+	foreach (D3_PAGES as $key => [$path, $user, $passwordFile, $jarName]) {
+		check('D3', "open the token page as $user while guestu is not the guest", function () use ($key, $path, $user, $passwordFile, $jarName, &$state) {
+			$jar  = web_login($user, $passwordFile, SECRETS . '/' . $jarName);
+			$page = http('GET', BASE . '/' . $path, [], null, $jar);
+
+			if ($page['status'] !== 200) {
+				return 'status ' . $page['status'] . ', expected 200';
+			}
+			$nonce = hidden_value($page['body'], 'mcp_nonce');
+
+			if ($nonce === null) {
+				return 'the page has no create form';
+			}
+
+			if ($key === 'admin' && !in_array(guestu_id(), user_dropdown_ids($page['body']) ?? [], true)) {
+				return 'the User dropdown does not list guestu before the change, so the later absence proves nothing';
+			}
+			// Kept for the case where the reloaded page no longer offers the form: a stale tab would
+			// still hold this nonce and CSRF token.
+			$state[$key] = ['nonce' => $nonce, 'csrf' => csrf_field($page['body'])];
+
+			return null;
+		});
+	}
+	umask(0077);
+	file_put_contents(D3_STATE, json_encode($state, JSON_THROW_ON_ERROR));
+}
+
+/** D3, second half: reload both pages after guest_user is set, then try to create a token for guestu. */
+function phase_d3_finish() : void {
+	$state = json_decode((string) @file_get_contents(D3_STATE), true) ?: [];
+
+	foreach (['self' => ['D3a', 'self-service create as guestu'], 'admin' => ['D3b', 'admin create for guestu']] as $key => [$id, $name]) {
+		[$path, $user, , $jarName] = D3_PAGES[$key];
+
+		check($id, $name, function () use ($key, $path, $user, $jarName, $state) {
+			$jar = SECRETS . '/' . $jarName;
+
+			if (!is_file($jar) || !isset($state[$key])) {
+				return "no session from the d3-open phase for $user";
+			}
+			$page   = http('GET', BASE . '/' . $path, [], null, $jar);
+			$reason = [];
+
+			if ($page['status'] !== 200) {
+				return 'reload returned status ' . $page['status'];
+			}
+
+			if ($key === 'admin') {
+				$ids = user_dropdown_ids($page['body']);
+
+				if ($ids === null) {
+					// A page that offers nobody has no dropdown at all; that is a legitimate fail-closed state.
+					$ids = [];
+				}
+
+				if (in_array(guestu_id(), $ids, true)) {
+					$reason[] = 'guestu is still in the User dropdown';
+				}
+			}
+			// Cacti may already have ended the session of an account that is now the guest; the reload is
+			// then the login page, whose form belongs to a new session. Use the values saved at open.
+			$ended = str_contains($page['body'], 'login_username');
+			$nonce = ($ended ? null : hidden_value($page['body'], 'mcp_nonce')) ?? $state[$key]['nonce'];
+
+			try {
+				if ($ended) {
+					throw new RuntimeException('session ended');
+				}
+				[$csrfName, $csrfValue] = csrf_field($page['body']);
+			} catch (RuntimeException $error) {
+				[$csrfName, $csrfValue] = $state[$key]['csrf'];
+			}
+			$fields = ['action' => 'create_token', 'days' => '1', 'mcp_nonce' => $nonce, $csrfName => $csrfValue];
+
+			if ($key === 'admin') {
+				$fields['user_id'] = (string) guestu_id();
+			}
+			$post = http('POST', BASE . '/' . strtok($path, '?'), ['Content-Type: application/x-www-form-urlencoded'], http_build_query($fields), $jar);
+
+			// A redirect is followed once with the same session, as a browser would.
+			if ($post['status'] === 302 && ($post['headers']['location'][0] ?? '') !== '') {
+				$location = $post['headers']['location'][0];
+				$next     = str_starts_with($location, 'http') ? $location : 'http://localhost' . (str_starts_with($location, '/') ? '' : '/cacti/') . $location;
+				$post     = http('GET', $next, [], null, $jar);
+			}
+
+			if (str_contains($post['body'], 'cmcp_pat_')) {
+				$reason[] = 'a token was created for guestu';
+			} elseif ($post['status'] !== 200 || !(str_contains($post['body'], REFUSAL_TEXT) || str_contains($post['body'], 'login_username'))) {
+				// Two refusals are real: the plugin's own message, or Cacti ending the session of an
+				// account that is now the guest (the plugin's forced read refreshes the cached setting,
+				// so the request after it meets Cacti's own guest check). Anything else is unexplained.
+				$reason[] = 'the POST (status ' . $post['status'] . ') was neither refused by the plugin nor answered with the login page';
+			}
+
+			return $reason ? implode('; ', $reason) : null;
+		});
+	}
+
+	foreach (array_column(D3_PAGES, 3) as $jarName) {
+		@unlink(SECRETS . '/' . $jarName);
+	}
+	@unlink(D3_STATE);
+}
+
+/** The session the db-down checks present as a cookie. It must be made while the database is up. */
+function phase_db_down_prep() : void {
+	check('D2', 'sign in as mcpuser before the database stops', function () {
+		web_login('mcpuser', 'mcpuser-password', SECRETS . '/jar-mcpuser');
+
+		return null;
+	});
+}
+
+/** The reason a response is not a clean 503 JSON error, or null. */
+function unavailable_reason(array $response) : ?string {
+	if ($reason = want_status($response, 503)) {
+		return $reason;
+	}
+
+	if (!str_starts_with($response['headers']['content-type'][0] ?? '', 'application/json')) {
+		return 'Content-Type is not application/json';
+	}
+
+	try {
+		$json = json_decode($response['body'], true, 64, JSON_THROW_ON_ERROR);
+	} catch (JsonException $error) {
+		return 'body is not a single JSON document';
+	}
+
+	if (!is_array($json)) {
+		return 'body is not a JSON object';
+	}
+
+	if (str_contains($response['body'], '<')) {
+		return 'body contains "<"';
+	}
+
+	if (isset($response['headers']['set-cookie'])) {
+		return 'response sets a cookie';
+	}
+	$data   = $json['error']['data'] ?? null;
+	$status = is_array($data) ? ($data['status'] ?? null) : ($json['error']['status'] ?? null);
+	$why    = is_array($data) ? ($data['reason'] ?? null) : ($json['error']['details'][0]['reason'] ?? null);
+
+	return $status === 'UNAVAILABLE' && $why === 'CACTI_UNAVAILABLE' ? null : 'error is not UNAVAILABLE/CACTI_UNAVAILABLE';
+}
+
+/**
+ * D2: with the database stopped, both endpoints answer 503 JSON for a bearer token alone and for
+ * a bearer token sent together with a session cookie. A cookie without a token is answered 401 before
+ * the database is read (C5), so it cannot reach the 503 path and is not tested here.
+ */
+function phase_db_down() : void {
+	$token = secret('token-mcpuser');
+	$jar   = SECRETS . '/jar-mcpuser';
+	$modern = ['Content-Type: application/json', 'Accept: application/json, text/event-stream',
+		'Mcp-Protocol-Version: ' . MODERN, 'Mcp-Method: tools/list'];
+	$list = json_encode(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list', 'params' => ['_meta' => [VERSION_META => MODERN]]], JSON_THROW_ON_ERROR);
+	$exec = '/v1/abilities/cacti-get-system-info:execute';
+
+	$requests = [
+		'mcp.php tools/list'    => fn (bool $cookie) => http('POST', MCP_URL, array_merge($modern, ['Authorization: Bearer ' . $token]), $list, $cookie ? $jar : null),
+		'api.php abilities'     => fn (bool $cookie) => http('GET', API_URL . '/v1/abilities', ['Authorization: Bearer ' . $token], null, $cookie ? $jar : null),
+		'api.php :execute'      => fn (bool $cookie) => http('POST', API_URL . $exec, ['Content-Type: application/json', 'Authorization: Bearer ' . $token], '{"arguments":{}}', $cookie ? $jar : null),
+	];
+
+	foreach ([false, true] as $cookie) {
+		foreach ($requests as $label => $send) {
+			check('D2', ($cookie ? 'bearer token and session cookie' : 'bearer token') . " on $label", function () use ($send, $cookie, $jar) {
+				if ($cookie && !is_file($jar)) {
+					return 'no session: the db-down-prep phase failed';
+				}
+
+				return unavailable_reason($send($cookie));
+			});
+		}
+	}
+	@unlink($jar);
+}
+
+/** After the database is back, the C2 modern tools/list must work again. */
+function phase_db_up() : void {
+	check('D2', 'tools/list works again after the database restarts', function () {
+		$response = mcp_modern(secret('token-mcpuser'), 'tools/list');
+
+		if ($reason = want_status($response, 200)) {
+			return $reason;
+		}
+		$names = tool_names($response);
+
+		return $names === ['cacti-get-device', 'cacti-get-system-info', 'cacti-list-devices'] ? null : (is_string($names) ? $names : 'tool names were [' . implode(', ', $names) . ']');
+	});
+}
+
 $options = getopt('', ['ref:', 'phase:']);
 $ref     = $options['ref'] ?? '';
 $phase   = $options['phase'] ?? '';
 
 if (!in_array($ref, ['1.2.31', 'develop'], true)) {
-	fwrite(STDERR, "usage: checks.php --ref=<1.2.31|develop> --phase=<smoke|main|d3-open|d3-finish|db-down|db-up>\n");
+	fwrite(STDERR, "usage: checks.php --ref=<1.2.31|develop> --phase=<smoke|main|d3-open|d3-finish|db-down-prep|db-down|db-up>\n");
 	exit(2);
 }
 
@@ -560,11 +848,20 @@ switch ($phase) {
 		phase_main($ref);
 		break;
 	case 'd3-open':
+		phase_d3_open();
+		break;
 	case 'd3-finish':
+		phase_d3_finish();
+		break;
+	case 'db-down-prep':
+		phase_db_down_prep();
+		break;
 	case 'db-down':
+		phase_db_down();
+		break;
 	case 'db-up':
-		fwrite(STDERR, "phase $phase is not implemented yet\n");
-		exit(1);
+		phase_db_up();
+		break;
 	default:
 		fwrite(STDERR, "unknown phase\n");
 		exit(2);
