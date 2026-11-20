@@ -7,3 +7,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Integration test checkouts and run output
+tests/integration/out/
+tests/integration/src/
