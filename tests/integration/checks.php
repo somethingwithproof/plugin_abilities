@@ -666,7 +666,7 @@ function phase_d3_open() : void {
 /*
  * D3 detection power differs by ref. On 1.2.31 the stale-read regression is detectable: the session keeps
  * the old guest_user, so the plugin's forced read is what stops a token. On develop Cacti ends the session
- * of an account that becomes the guest and reads guest_user fresh, so D3 there only guards that no token
+ * of an account that becomes the guest, so D3 there only guards that no token
  * is minted and the row count is unchanged; the stale-read regression is detectable on 1.2.31 only.
  */
 
