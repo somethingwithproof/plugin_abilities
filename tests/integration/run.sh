@@ -36,8 +36,13 @@ src="$here/src/$ref"
 
 # Pinned image used for host-side cleanup of files a container created as root.
 cli_image="$(sed -n 's/^ *image: \(php:8\.4-cli@sha256:[0-9a-f]*\)$/\1/p' "$here/compose.yaml")"
+if [ -z "$cli_image" ]; then
+	echo "could not read the pinned php:8.4-cli image from $here/compose.yaml" >&2
+	exit 2
+fi
 
 current=init
+cacti_commit=unknown
 failed_phases=()
 
 compose() {
@@ -73,18 +78,6 @@ soft_phase() {
 	fi
 }
 
-collect_logs() {
-	mkdir -p "$out"
-	compose --profile '*' logs --no-color > "$out/compose.log" 2>&1 || echo "could not collect compose logs" >&2
-	if [ -f "$src/log/cacti.log" ]; then
-		cp "$src/log/cacti.log" "$out/cacti.log" || echo "could not copy cacti.log" >&2
-	fi
-	if [ "$web" = nginx ]; then
-		in_web cat /var/log/nginx/access.log > "$out/nginx-access.log" 2>/dev/null || echo "could not read the nginx access log" >&2
-		in_web cat /var/log/nginx/error.log > "$out/nginx-error.log" 2>/dev/null || echo "could not read the nginx error log" >&2
-	fi
-}
-
 on_exit() {
 	local rc=$?
 	trap - EXIT
@@ -95,8 +88,10 @@ on_exit() {
 		failed_phases+=("$current")
 	fi
 
-	if [ "$current" != init ] || [ -d "$out" ]; then
-		collect_logs
+	# The logs phase writes summary.md. If it never got that far (a setup phase failed,
+	# or it broke midway), do its work here so a failed run still leaves redacted logs.
+	if { [ "$current" != init ] || [ -d "$out" ]; } && [ ! -f "$out/summary.md" ]; then
+		( set -e; phase_logs ) || rc=1
 	fi
 
 	if [ "${KEEP:-0}" = 1 ]; then
@@ -107,7 +102,6 @@ on_exit() {
 	fi
 
 	if [ "${#failed_phases[@]}" -gt 0 ]; then
-		printf 'FAILED_PHASE=%s\n' "${failed_phases[0]}" >> "$out/summary.md" 2>/dev/null
 		[ "$rc" -ne 0 ] || rc=1
 	fi
 	exit "$rc"
@@ -134,6 +128,7 @@ if ! compose --profile '*' down -v --remove-orphans > /dev/null 2>&1; then
 fi
 rm -rf "$out"
 mkdir -p "$out"
+: > "$out/checks.log"
 
 phase_clone() {
 	if [ -e "$src" ]; then
@@ -142,10 +137,10 @@ phase_clone() {
 	fi
 	mkdir -p "$here/src"
 	git clone --quiet --depth 1 --branch "$branch" https://github.com/Cacti/cacti "$src"
-	printf 'CACTI_COMMIT=%s\nCACTI_REF=%s\n' "$(git -C "$src" rev-parse HEAD)" "$ref" > "$out/summary.md"
+	cacti_commit="$(git -C "$src" rev-parse HEAD)"
 
 	if [ -z "$tarball" ]; then
-		tarball="$out/mcp.tar.gz"
+		tarball="$here/src/mcp-$ref.tar.gz"
 		git -C "$repo" archive --format=tar.gz --prefix=mcp/ HEAD > "$tarball"
 	fi
 	export MCP_IT_TARBALL="$tarball"
@@ -184,8 +179,58 @@ phase_checks() {
 	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=main 2>&1 | tee -a "$out/checks.log"
 }
 
+# MCP Inspector, run in the inspector service against the live endpoint. The token is
+# read from the shared tmpfs inside sh -c, so it is not in this script, the Compose
+# command line or any trace. Inspector 2.16.0 is pinned and bumped by hand.
+# --no-deps: without it Compose would recreate web and db and empty the secrets volume.
+inspector_run() {
+	local outfile="$1" errfile="$2"
+	shift 2
+	compose run --rm --no-deps -T inspector sh -c 'T=$(cat /run/mcp-it/token-mcpuser); exec npx -y @modelcontextprotocol/inspector@2.16.0 --cli http://localhost/cacti/plugins/mcp/mcp.php --transport http --header "Authorization: Bearer $T" "$@"' sh "$@" < /dev/null > "$outfile" 2> "$errfile"
+}
+
+# Read JSON on stdin in the inspector container (Node is only there) and run a check.
+# The check prints a reason on failure and never the document itself.
+inspector_check() {
+	local file="$1" script="$2"
+	compose run --rm --no-deps -T inspector node -e "$script" < "$file"
+}
+
 phase_inspector() {
-	echo "inspector: not implemented yet"
+	local rc=0 reason=""
+	local list_js='
+let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+  let j; try { j = JSON.parse(s); } catch (e) { console.log("output is not JSON"); process.exit(1); }
+  const names = (j.tools || []).map(t => t.name);
+  const missing = ["cacti-list-devices", "cacti-get-device", "cacti-get-system-info"].filter(n => !names.includes(n));
+  if (missing.length) { console.log("missing tools: " + missing.join(", ")); process.exit(1); }
+});'
+	local call_js='
+let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+  let j; try { j = JSON.parse(s); } catch (e) { console.log("output is not JSON"); process.exit(1); }
+  if (j.isError === true) { console.log("isError is true"); process.exit(1); }
+  const text = (j.content || []).filter(c => c.type === "text").map(c => c.text).join("\n");
+  const missing = ["it-alpha", "it-beta"].filter(n => !text.includes(n));
+  if (missing.length) { console.log("result lacks: " + missing.join(", ")); process.exit(1); }
+});'
+
+	if inspector_run "$out/inspector-list.json" "$out/inspector-list.err" --method tools/list \
+		&& reason="$(inspector_check "$out/inspector-list.json" "$list_js")"; then
+		echo "PASS I1 inspector tools/list" | tee -a "$out/checks.log"
+	else
+		echo "FAIL I1 inspector tools/list: ${reason:-inspector exited with an error}" | tee -a "$out/checks.log"
+		rc=1
+	fi
+
+	reason=""
+	if inspector_run "$out/inspector-call.json" "$out/inspector-call.err" --method tools/call --tool-name cacti-list-devices \
+		&& reason="$(inspector_check "$out/inspector-call.json" "$call_js")"; then
+		echo "PASS I2 inspector tools/call" | tee -a "$out/checks.log"
+	else
+		echo "FAIL I2 inspector tools/call: ${reason:-inspector exited with an error}" | tee -a "$out/checks.log"
+		rc=1
+	fi
+	return "$rc"
 }
 
 # D3: sessions opened before guest_user changes must not be able to create a token for it.
@@ -231,8 +276,137 @@ phase_db_down() {
 	return "$rc"
 }
 
+# Copy the logs out of the web container. A log that cannot be read is a failure: it
+# would otherwise let a broken run look clean. Returns 1 if any read failed.
+collect_logs() {
+	local rc=0 grc apache_access='^[^ ]+ [^ ]+ [^ ]+ \[[0-9]+/[A-Za-z]+/[0-9]+:'
+	mkdir -p "$out"
+	compose --profile '*' logs --no-color > "$out/compose.log" 2>&1 \
+		|| { echo "FAIL L1 log read error: compose logs"; rc=1; }
+	# Everything the web container writes to stdout and stderr: PHP's error log, and on
+	# develop PHP-FPM's. Apache's access and error logs go there too.
+	compose logs --no-color --no-log-prefix web > "$out/php.log" \
+		|| { echo "FAIL L1 log read error: web container output"; rc=1; }
+	# exec cat as root, not a host copy: the container chowns log/ to www-data.
+	in_web cat /var/www/cacti/log/cacti.log > "$out/cacti.log" \
+		|| { echo "FAIL L1 log read error: cacti.log"; rc=1; }
+	if [ "$web" = nginx ]; then
+		in_web cat /var/log/nginx/access.log > "$out/web-access.log" \
+			|| { echo "FAIL L1 log read error: nginx access log"; rc=1; }
+		in_web cat /var/log/nginx/error.log > "$out/web-error.log" \
+			|| { echo "FAIL L1 log read error: nginx error log"; rc=1; }
+	else
+		# Apache logs to the container's stdout and stderr, so split what compose gave us.
+		grc=0
+		grep -E "$apache_access" "$out/php.log" > "$out/web-access.log" || grc=$?
+		[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: apache access log"; rc=1; }
+		grc=0
+		grep -vE "$apache_access" "$out/php.log" > "$out/web-error.log" || grc=$?
+		[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: apache error log"; rc=1; }
+	fi
+	return "$rc"
+}
+
+# Replace every token with cmcp_pat_REDACTED in every file in out/. sed -E writing a new
+# file works the same on BSD and GNU sed, unlike sed -i.
+redact_out() {
+	local f
+	for f in "$out"/*; do
+		[ -f "$f" ] || continue
+		LC_ALL=C sed -E 's/cmcp_pat_[A-Za-z0-9_-]+/cmcp_pat_REDACTED/g' "$f" > "$f.tmp" || return 1
+		mv "$f.tmp" "$f" || return 1
+	done
+}
+
+# Any cmcp_pat_ value other than the placeholder left in out/ is a leak. grep exits 1
+# for no match, which is the pass case; above 1 is an error and also fails.
+scan_out_for_tokens() {
+	local found rest rc=0
+	found="$(mktemp)"
+	rest="$(mktemp)"
+	grep -rhoE 'cmcp_pat_[A-Za-z0-9_-]+' "$out" > "$found" || rc=$?
+	if [ "$rc" -le 1 ]; then
+		rc=0
+		grep -vx cmcp_pat_REDACTED "$found" > "$rest" || rc=$?
+	fi
+	rm -f "$found" "$rest"
+	case "$rc" in
+		0) echo "FAIL R1 token left in artifacts"; return 1 ;;
+		1) echo "PASS R1 no token left in artifacts" ;;
+		*) echo "FAIL R1 token scan error"; return 1 ;;
+	esac
+}
+
+write_summary() {
+	local result="$1" body="${2:-}"
+	{
+		echo "Result: $result"
+		echo "Cacti ref: $ref"
+		echo "Cacti commit: $cacti_commit"
+		echo "Plugin commit: $(git -C "$repo" rev-parse HEAD)"
+		echo
+		if [ -n "$body" ]; then
+			echo "$body"
+		else
+			cat "$out/checks.txt"
+		fi
+	} > "$out/summary.md"
+}
+
+# The run window is the fresh stack itself: every run starts from down -v, so the logs
+# hold nothing from an earlier run.
 phase_logs() {
-	echo "logs: not implemented yet"
+	local l1=0 grc=0 result hits f
+
+	collect_logs || l1=1
+
+	# checks.txt: the PASS, FAIL and SKIP lines. grep exits 1 when there are none.
+	grep -E '^(PASS|FAIL|SKIP) ' "$out/checks.log" > "$out/checks.txt" || grc=$?
+	[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: checks.log"; l1=1; }
+
+	if [ "$l1" -eq 0 ]; then
+		hits="$(mktemp)"
+		grc=0
+		grep -E '(PHP )?(Warning|Notice|Deprecated|Fatal error|Parse error).*plugins/mcp/' \
+			"$out/cacti.log" "$out/php.log" "$out/web-error.log" > "$hits" || grc=$?
+		case "$grc" in
+			0)
+				echo "FAIL L1 plugin PHP messages" | tee -a "$out/checks.txt"
+				sed -n '1,50p' "$hits" | sed 's/^/    /' >> "$out/checks.txt"
+				l1=1
+				;;
+			1) echo "PASS L1 no plugin PHP messages in the logs" | tee -a "$out/checks.txt" ;;
+			*) echo "FAIL L1 log read error: scan" | tee -a "$out/checks.txt"; l1=1 ;;
+		esac
+		rm -f "$hits"
+	else
+		echo "FAIL L1 log read error" | tee -a "$out/checks.txt"
+	fi
+
+	# Redaction covers every file written so far, hits included.
+	redact_out || { echo "FAIL R1 could not redact the logs"; return 1; }
+
+	if [ "${#failed_phases[@]}" -gt 0 ]; then
+		result="FAILED PHASE ${failed_phases[0]}"
+	elif [ "$l1" -ne 0 ]; then
+		result="FAILED PHASE logs"
+	else
+		result=PASS
+	fi
+	write_summary "$result"
+
+	# Last: after every file in out/ is written.
+	if ! scan_out_for_tokens; then
+		# Do not leave the leak in files a workflow uploads.
+		for f in "$out"/*; do
+			if [ -f "$f" ] && [ "$f" != "$out/summary.md" ]; then
+				echo "withheld: FAIL R1 token left in artifacts" > "$f"
+			fi
+		done
+		write_summary "FAILED PHASE logs" "FAIL R1 token left in artifacts (files withheld)"
+		return 1
+	fi
+	[ "$l1" -eq 0 ]
 }
 
 # Setup phases: the first failure ends the run, and on_exit reports it.
