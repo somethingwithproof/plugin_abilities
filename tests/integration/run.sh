@@ -33,6 +33,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 out="$here/out/$ref"
 src="$here/src/$ref"
+# Raw output (unredacted logs, checks.log, Inspector files) stays here, outside out/. Only
+# redacted copies are written into out/, so nothing a workflow uploads can hold a token
+# whatever happens to the run. src/ is gitignored.
+raw="$here/src/raw-$ref"
 
 # Pinned image used for host-side cleanup of files a container created as root.
 cli_image="$(sed -n 's/^ *image: \(php:8\.4-cli@sha256:[0-9a-f]*\)$/\1/p' "$here/compose.yaml")"
@@ -54,8 +58,11 @@ in_web() {
 	compose exec -T web "$@"
 }
 
+# Every setup step's output is also kept in raw/setup.log, so the L1 scan covers warnings
+# from plugin code run under the CLI (plugin_manage.php, tokens.php). tee passes stdout
+# through, so callers that capture a value still get it.
 setup() {
-	in_web bash /opt/mcp-it/setup.sh "$@"
+	in_web bash /opt/mcp-it/setup.sh "$@" > >(tee -a "$raw/setup.log") 2> >(tee -a "$raw/setup.log" >&2)
 }
 
 phase() {
@@ -126,9 +133,12 @@ trap on_exit EXIT
 if ! compose --profile '*' down -v --remove-orphans > /dev/null 2>&1; then
 	echo "warning: could not remove an earlier $project stack" >&2
 fi
-rm -rf "$out"
-mkdir -p "$out"
-: > "$out/checks.log"
+echo "docker server $(docker version --format '{{.Server.Version}}'), client $(docker version --format '{{.Client.Version}}')"
+docker compose version
+rm -rf "$out" "$raw"
+mkdir -p "$out" "$raw"
+: > "$raw/checks.log"
+: > "$raw/setup.log"
 
 phase_clone() {
 	if [ -e "$src" ]; then
@@ -138,6 +148,7 @@ phase_clone() {
 	mkdir -p "$here/src"
 	git clone --quiet --depth 1 --branch "$branch" https://github.com/Cacti/cacti "$src"
 	cacti_commit="$(git -C "$src" rev-parse HEAD)"
+	echo "Cacti commit: $cacti_commit"
 
 	if [ -z "$tarball" ]; then
 		tarball="$here/src/mcp-$ref.tar.gz"
@@ -175,8 +186,8 @@ phase_plugin() {
 }
 
 phase_checks() {
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=smoke 2>&1 | tee "$out/checks.log"
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=main 2>&1 | tee -a "$out/checks.log"
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=smoke 2>&1 | tee "$raw/checks.log"
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=main 2>&1 | tee -a "$raw/checks.log"
 }
 
 # MCP Inspector, run in the inspector service against the live endpoint. The token is
@@ -214,20 +225,20 @@ let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
   if (missing.length) { console.log("result lacks: " + missing.join(", ")); process.exit(1); }
 });'
 
-	if inspector_run "$out/inspector-list.json" "$out/inspector-list.err" --method tools/list \
-		&& reason="$(inspector_check "$out/inspector-list.json" "$list_js")"; then
-		echo "PASS I1 inspector tools/list" | tee -a "$out/checks.log"
+	if inspector_run "$raw/inspector-list.json" "$raw/inspector-list.err" --method tools/list \
+		&& reason="$(inspector_check "$raw/inspector-list.json" "$list_js")"; then
+		echo "PASS I1 inspector tools/list" | tee -a "$raw/checks.log"
 	else
-		echo "FAIL I1 inspector tools/list: ${reason:-inspector exited with an error}" | tee -a "$out/checks.log"
+		echo "FAIL I1 inspector tools/list: ${reason:-inspector exited with an error}" | tee -a "$raw/checks.log"
 		rc=1
 	fi
 
 	reason=""
-	if inspector_run "$out/inspector-call.json" "$out/inspector-call.err" --method tools/call --tool-name cacti-list-devices \
-		&& reason="$(inspector_check "$out/inspector-call.json" "$call_js")"; then
-		echo "PASS I2 inspector tools/call" | tee -a "$out/checks.log"
+	if inspector_run "$raw/inspector-call.json" "$raw/inspector-call.err" --method tools/call --tool-name cacti-list-devices \
+		&& reason="$(inspector_check "$raw/inspector-call.json" "$call_js")"; then
+		echo "PASS I2 inspector tools/call" | tee -a "$raw/checks.log"
 	else
-		echo "FAIL I2 inspector tools/call: ${reason:-inspector exited with an error}" | tee -a "$out/checks.log"
+		echo "FAIL I2 inspector tools/call: ${reason:-inspector exited with an error}" | tee -a "$raw/checks.log"
 		rc=1
 	fi
 	return "$rc"
@@ -240,18 +251,16 @@ phase_d3() {
 	before="$(setup count-tokens guestu | tr -d '\r\n')"
 	[[ "$before" =~ ^[0-9]+$ ]] || { echo "FAIL D3 count: could not count guestu's tokens" >&2; return 1; }
 
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=d3-open 2>&1 | tee -a "$out/checks.log" || rc=1
-	in_web sh -c "printf '{\"guestu\": %s}' $before > /run/mcp-it/d3-before.json" || rc=1
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=d3-open 2>&1 | tee -a "$raw/checks.log" || rc=1
 	setup guest-on || rc=1
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=d3-finish 2>&1 | tee -a "$out/checks.log" || rc=1
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=d3-finish 2>&1 | tee -a "$raw/checks.log" || rc=1
 	after="$(setup count-tokens guestu | tr -d '\r\n')" || rc=1
 	setup guest-off || rc=1
-	in_web rm -f /run/mcp-it/d3-before.json
 
 	if [[ "$after" =~ ^[0-9]+$ ]] && [ "$after" -le "$before" ]; then
-		echo "PASS D3 token rows for guestu unchanged ($before)" | tee -a "$out/checks.log"
+		echo "PASS D3 token rows for guestu unchanged ($before)" | tee -a "$raw/checks.log"
 	else
-		echo "FAIL D3 token rows for guestu: before $before, after ${after:-unknown}" | tee -a "$out/checks.log"
+		echo "FAIL D3 token rows for guestu: before $before, after ${after:-unknown}" | tee -a "$raw/checks.log"
 		rc=1
 	fi
 	return "$rc"
@@ -260,9 +269,9 @@ phase_d3() {
 # D2: stop the database, check both endpoints, and start it again even if a check fails.
 phase_db_down() {
 	local rc=0 i status=""
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-down-prep 2>&1 | tee -a "$out/checks.log" || rc=1
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-down-prep 2>&1 | tee -a "$raw/checks.log" || rc=1
 	compose stop db
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-down 2>&1 | tee -a "$out/checks.log" || rc=1
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-down 2>&1 | tee -a "$raw/checks.log" || rc=1
 	compose start db
 
 	for i in $(seq 1 60); do
@@ -270,9 +279,9 @@ phase_db_down() {
 		[ "$status" = healthy ] && break
 		sleep 2
 	done
-	[ "$status" = healthy ] || { echo "FAIL D2 the database did not become healthy again" | tee -a "$out/checks.log"; return 1; }
+	[ "$status" = healthy ] || { echo "FAIL D2 the database did not become healthy again" | tee -a "$raw/checks.log"; return 1; }
 
-	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-up 2>&1 | tee -a "$out/checks.log" || rc=1
+	compose run --rm --no-deps -T checks php /checks/checks.php --ref="$ref" --phase=db-up 2>&1 | tee -a "$raw/checks.log" || rc=1
 	return "$rc"
 }
 
@@ -280,54 +289,58 @@ phase_db_down() {
 # would otherwise let a broken run look clean. Returns 1 if any read failed.
 collect_logs() {
 	local rc=0 grc apache_access='^[^ ]+ [^ ]+ [^ ]+ \[[0-9]+/[A-Za-z]+/[0-9]+:'
-	mkdir -p "$out"
-	compose --profile '*' logs --no-color > "$out/compose.log" 2>&1 \
+	compose --profile '*' logs --no-color > "$raw/compose.log" 2>&1 \
 		|| { echo "FAIL L1 log read error: compose logs"; rc=1; }
 	# Everything the web container writes to stdout and stderr: PHP's error log, and on
 	# develop PHP-FPM's. Apache's access and error logs go there too.
-	compose logs --no-color --no-log-prefix web > "$out/php.log" \
+	compose logs --no-color --no-log-prefix web > "$raw/php.log" \
 		|| { echo "FAIL L1 log read error: web container output"; rc=1; }
 	# exec cat as root, not a host copy: the container chowns log/ to www-data.
-	in_web cat /var/www/cacti/log/cacti.log > "$out/cacti.log" \
+	in_web cat /var/www/cacti/log/cacti.log > "$raw/cacti.log" \
 		|| { echo "FAIL L1 log read error: cacti.log"; rc=1; }
 	if [ "$web" = nginx ]; then
-		in_web cat /var/log/nginx/access.log > "$out/web-access.log" \
+		in_web cat /var/log/nginx/access.log > "$raw/web-access.log" \
 			|| { echo "FAIL L1 log read error: nginx access log"; rc=1; }
-		in_web cat /var/log/nginx/error.log > "$out/web-error.log" \
+		in_web cat /var/log/nginx/error.log > "$raw/web-error.log" \
 			|| { echo "FAIL L1 log read error: nginx error log"; rc=1; }
 	else
 		# Apache logs to the container's stdout and stderr, so split what compose gave us.
 		grc=0
-		grep -E "$apache_access" "$out/php.log" > "$out/web-access.log" || grc=$?
+		grep -E "$apache_access" "$raw/php.log" > "$raw/web-access.log" || grc=$?
 		[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: apache access log"; rc=1; }
 		grc=0
-		grep -vE "$apache_access" "$out/php.log" > "$out/web-error.log" || grc=$?
+		grep -vE "$apache_access" "$raw/php.log" > "$raw/web-error.log" || grc=$?
 		[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: apache error log"; rc=1; }
 	fi
 	return "$rc"
 }
 
-# Replace every token with cmcp_pat_REDACTED in every file in out/. sed -E writing a new
-# file works the same on BSD and GNU sed, unlike sed -i.
-redact_out() {
-	local f
-	for f in "$out"/*; do
-		[ -f "$f" ] || continue
-		LC_ALL=C sed -E 's/cmcp_pat_[A-Za-z0-9_-]+/cmcp_pat_REDACTED/g' "$f" > "$f.tmp" || return 1
-		mv "$f.tmp" "$f" || return 1
-	done
+# Write a redacted copy of every file under raw/ to the same relative path under out/,
+# replacing each token with cmcp_pat_REDACTED. LC_ALL=C and a pipe through sed handle
+# binary content on BSD and GNU sed alike. Any failure returns 1.
+redact_to_out() {
+	local list f rel
+	list="$(mktemp)"
+	find "$raw" -type f -print0 > "$list" || { rm -f "$list"; return 1; }
+	while IFS= read -r -d '' f; do
+		rel="${f#"$raw"/}"
+		mkdir -p "$(dirname "$out/$rel")" || { rm -f "$list"; return 1; }
+		LC_ALL=C sed -E 's/cmcp_pat_[A-Za-z0-9_-]+/cmcp_pat_REDACTED/g' "$f" > "$out/$rel" || { rm -f "$list"; return 1; }
+	done < "$list"
+	rm -f "$list"
 }
 
-# Any cmcp_pat_ value other than the placeholder left in out/ is a leak. grep exits 1
-# for no match, which is the pass case; above 1 is an error and also fails.
+# Any cmcp_pat_ value other than the placeholder left in out/ is a leak. -a makes grep
+# search binary files as text; without it a file with a NUL byte matches silently. grep
+# exits 1 for no match, which is the pass case; above 1 is an error and also fails.
 scan_out_for_tokens() {
 	local found rest rc=0
 	found="$(mktemp)"
 	rest="$(mktemp)"
-	grep -rhoE 'cmcp_pat_[A-Za-z0-9_-]+' "$out" > "$found" || rc=$?
+	LC_ALL=C grep -a -rhoE 'cmcp_pat_[A-Za-z0-9_-]+' "$out" > "$found" || rc=$?
 	if [ "$rc" -le 1 ]; then
 		rc=0
-		grep -vx cmcp_pat_REDACTED "$found" > "$rest" || rc=$?
+		LC_ALL=C grep -a -vx cmcp_pat_REDACTED "$found" > "$rest" || rc=$?
 	fi
 	rm -f "$found" "$rest"
 	case "$rc" in
@@ -337,54 +350,75 @@ scan_out_for_tokens() {
 	esac
 }
 
+# The summary names the first phase that failed; "logs" only when nothing before it did.
+first_failure() {
+	if [ "${#failed_phases[@]}" -gt 0 ]; then
+		echo "FAILED PHASE ${failed_phases[0]}"
+	else
+		echo "FAILED PHASE logs"
+	fi
+}
+
+# Replace everything in out/ with a fixed summary, so nothing unredacted or unchecked is
+# left in the uploaded path. The text is fixed and holds no run output.
+withhold_out() {
+	local why="$1"
+	find "$out" -mindepth 1 -delete
+	{
+		echo "Result: $(first_failure)"
+		echo "Cacti ref: $ref"
+		echo
+		echo "$why"
+	} > "$out/summary.md"
+}
+
+# Written to raw/, so it is redacted and scanned with everything else.
 write_summary() {
-	local result="$1" body="${2:-}"
+	local result="$1"
 	{
 		echo "Result: $result"
 		echo "Cacti ref: $ref"
 		echo "Cacti commit: $cacti_commit"
 		echo "Plugin commit: $(git -C "$repo" rev-parse HEAD)"
 		echo
-		if [ -n "$body" ]; then
-			echo "$body"
-		else
-			cat "$out/checks.txt"
-		fi
-	} > "$out/summary.md"
+		cat "$raw/checks.txt"
+	} > "$raw/summary.md"
 }
 
 # The run window is the fresh stack itself: every run starts from down -v, so the logs
 # hold nothing from an earlier run.
 phase_logs() {
-	local l1=0 grc=0 result hits f
+	local l1=0 grc=0 result hits
 
 	collect_logs || l1=1
 
 	# checks.txt: the PASS, FAIL and SKIP lines. grep exits 1 when there are none.
-	grep -E '^(PASS|FAIL|SKIP) ' "$out/checks.log" > "$out/checks.txt" || grc=$?
+	grep -E '^(PASS|FAIL|SKIP) ' "$raw/checks.log" > "$raw/checks.txt" || grc=$?
 	[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: checks.log"; l1=1; }
 
 	if [ "$l1" -eq 0 ]; then
 		hits="$(mktemp)"
 		grc=0
-		grep -E '(PHP )?(Warning|Notice|Deprecated|Fatal error|Parse error).*plugins/mcp/' \
-			"$out/cacti.log" "$out/php.log" "$out/web-error.log" > "$hits" || grc=$?
+		# Two forms: PHP's own ("PHP Warning:  ... in /.../plugins/mcp/x.php") and Cacti's
+		# CactiErrorHandler ("PHP WARNING in  Plugin 'mcp': ... in file: /.../plugins/mcp/x.php").
+		# A Cacti core warning that only has the plugin in its Backtrace line is not matched.
+		# setup.log holds the CLI steps that run plugin code.
+		grep -E -e '(PHP )?(Warning|Notice|Deprecated|Fatal error|Parse error).*plugins/mcp/' \
+			-e "PHP [A-Za-z_ ]*(WARNING|NOTICE|DEPRECATED|ERROR|PARSE)( in +Plugin 'mcp'|:.* in file: [^ ]*plugins/mcp/)" \
+			"$raw/cacti.log" "$raw/php.log" "$raw/web-error.log" "$raw/setup.log" > "$hits" || grc=$?
 		case "$grc" in
 			0)
-				echo "FAIL L1 plugin PHP messages" | tee -a "$out/checks.txt"
-				sed -n '1,50p' "$hits" | sed 's/^/    /' >> "$out/checks.txt"
+				echo "FAIL L1 plugin PHP messages" | tee -a "$raw/checks.txt"
+				sed -n '1,50p' "$hits" | sed 's/^/    /' >> "$raw/checks.txt"
 				l1=1
 				;;
-			1) echo "PASS L1 no plugin PHP messages in the logs" | tee -a "$out/checks.txt" ;;
-			*) echo "FAIL L1 log read error: scan" | tee -a "$out/checks.txt"; l1=1 ;;
+			1) echo "PASS L1 no plugin PHP messages in the logs" | tee -a "$raw/checks.txt" ;;
+			*) echo "FAIL L1 log read error: scan" | tee -a "$raw/checks.txt"; l1=1 ;;
 		esac
 		rm -f "$hits"
 	else
-		echo "FAIL L1 log read error" | tee -a "$out/checks.txt"
+		echo "FAIL L1 log read error" | tee -a "$raw/checks.txt"
 	fi
-
-	# Redaction covers every file written so far, hits included.
-	redact_out || { echo "FAIL R1 could not redact the logs"; return 1; }
 
 	if [ "${#failed_phases[@]}" -gt 0 ]; then
 		result="FAILED PHASE ${failed_phases[0]}"
@@ -395,15 +429,16 @@ phase_logs() {
 	fi
 	write_summary "$result"
 
+	# Redaction covers every raw file, summary included, and only the redacted copies reach out/.
+	if ! redact_to_out; then
+		echo "FAIL R1 could not redact the logs"
+		withhold_out "FAIL R1 redaction failed; all logs withheld"
+		return 1
+	fi
+
 	# Last: after every file in out/ is written.
 	if ! scan_out_for_tokens; then
-		# Do not leave the leak in files a workflow uploads.
-		for f in "$out"/*; do
-			if [ -f "$f" ] && [ "$f" != "$out/summary.md" ]; then
-				echo "withheld: FAIL R1 token left in artifacts" > "$f"
-			fi
-		done
-		write_summary "FAILED PHASE logs" "FAIL R1 token left in artifacts (files withheld)"
+		withhold_out "FAIL R1 token left in artifacts (files withheld)"
 		return 1
 	fi
 	[ "$l1" -eq 0 ]

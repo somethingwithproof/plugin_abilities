@@ -577,7 +577,7 @@ fixtures at the Cacti helper boundary; they do not exercise a full Cacti install
 
 `tests/integration/run.sh 1.2.31` or `tests/integration/run.sh develop` installs the
 plugin into a real Cacti in containers and runs live checks against it. It needs Docker
-with Compose v2 and git. `KEEP=1` leaves the stack running for debugging. CI runs it
+with Compose v2, git and openssl. `KEEP=1` leaves the stack running for debugging. CI runs it
 nightly and on demand, not on pull requests.
 
 ## Contributing

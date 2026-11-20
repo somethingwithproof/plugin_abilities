@@ -694,7 +694,7 @@ function phase_d3_finish() : void {
 				$ids = user_dropdown_ids($page['body']);
 
 				if ($ids === null) {
-					// A page that offers nobody has no dropdown at all; that is a legitimate fail-closed state.
+					// No dropdown on the page means it offers nobody, so guestu cannot be in it; treat that as an empty list.
 					$ids = [];
 				}
 

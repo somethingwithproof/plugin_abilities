@@ -20,6 +20,9 @@ updates:
       default-days: 7
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
     groups:
       images:
         patterns: ['*']
@@ -29,6 +32,9 @@ updates:
       default-days: 7
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
     groups:
       compose:
         patterns: ['*']
