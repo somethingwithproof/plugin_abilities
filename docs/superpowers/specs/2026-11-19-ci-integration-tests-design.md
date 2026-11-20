@@ -6,7 +6,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 # Live integration tests in CI
 
 - Date: 2026-11-19
-- Status: Draft, awaiting approval
+- Status: Approved
 - Repository: `somethingwithproof/plugin_mcp`
 - Source: follow-up item 1 in `docs/superpowers/plans/2026-11-19-mcp-foundation.md`
 
