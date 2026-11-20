@@ -812,6 +812,10 @@ function unavailable_reason(array $response) : ?string {
 function phase_db_down() : void {
 	$token = secret('token-mcpuser');
 	$jar   = SECRETS . '/jar-mcpuser';
+	// The jar belongs to this phase from here on: remove it however the script ends.
+	register_shutdown_function(static function () use ($jar) {
+		@unlink($jar);
+	});
 	$modern = ['Content-Type: application/json', 'Accept: application/json, text/event-stream',
 		'Mcp-Protocol-Version: ' . MODERN, 'Mcp-Method: tools/list'];
 	$list = json_encode(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list', 'params' => ['_meta' => [VERSION_META => MODERN]]], JSON_THROW_ON_ERROR);
@@ -834,11 +838,12 @@ function phase_db_down() : void {
 			});
 		}
 	}
-	@unlink($jar);
 }
 
 /** After the database is back, the C2 modern tools/list must work again. */
 function phase_db_up() : void {
+	// Backstop: db-down may not have run (or died before its shutdown hook was set).
+	@unlink(SECRETS . '/jar-mcpuser');
 	check('D2', 'tools/list works again after the database restarts', function () {
 		$response = mcp_modern(secret('token-mcpuser'), 'tools/list');
 

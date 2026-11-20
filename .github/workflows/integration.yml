@@ -84,10 +84,16 @@ jobs:
           name: mcp-plugin-integration
           path: dist
       - name: Run live integration tests
-        run: tests/integration/run.sh "${{ matrix.cacti }}" dist/mcp.tar.gz
+        env:
+          CACTI_REF: ${{ matrix.cacti }}
+        run: tests/integration/run.sh "$CACTI_REF" dist/mcp.tar.gz
       - name: Write job summary
         if: always()
-        run: cat "tests/integration/out/${{ matrix.cacti }}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          CACTI_REF: ${{ matrix.cacti }}
+        run: |
+          f="tests/integration/out/$CACTI_REF/summary.md"
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; else echo "No summary (run.sh stopped early)" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

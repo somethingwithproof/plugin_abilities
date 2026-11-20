@@ -102,10 +102,12 @@ cmd_plugin() {
 }
 
 # Create a token for a user with tokens.php and save the raw value to $SECRETS/token-$2.
-# The value goes through the environment, never a command line. Prints the token id.
+# run.sh generates the value (so it can mask it first) and passes it as
+# MCP_IT_TOKEN_<NAME>. It goes through the environment, never a command line. Prints the token id.
 make_token() {
-	local user="$1" name="$2" token out
-	token="$(printf 'cmcp_pat_%s' "$(openssl rand -hex 32)")"
+	local user="$1" name="$2" token out var
+	var="MCP_IT_TOKEN_$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+	token="${!var:?$var is not set}"
 	out="$(CACTI_MCP_TOKEN="$token" php plugins/mcp/tokens.php --create="$user" --days=1)"
 	write_secret "token-$name" "$token"
 	[[ "$out" =~ ^Created\ token\ ID\ ([0-9]+)$ ]] || { echo "tokens.php did not report a token id" >&2; return 1; }

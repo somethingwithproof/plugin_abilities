@@ -40,8 +40,12 @@ raw="$here/src/raw-$ref"
 
 # Pinned image used for host-side cleanup of files a container created as root.
 cli_image="$(sed -n 's/^ *image: \(php:8\.4-cli@sha256:[0-9a-f]*\)$/\1/p' "$here/compose.yaml")"
+case "$cli_image" in
+	php:8.4-cli@sha256:*) [[ "$cli_image" != *$'\n'* ]] || cli_image="" ;;
+	*) cli_image="" ;;
+esac
 if [ -z "$cli_image" ]; then
-	echo "could not read the pinned php:8.4-cli image from $here/compose.yaml" >&2
+	echo "expected exactly one pinned php:8.4-cli image line in $here/compose.yaml" >&2
 	exit 2
 fi
 
@@ -62,7 +66,8 @@ in_web() {
 # from plugin code run under the CLI (plugin_manage.php, tokens.php). tee passes stdout
 # through, so callers that capture a value still get it.
 setup() {
-	in_web bash /opt/mcp-it/setup.sh "$@" > >(tee -a "$raw/setup.log") 2> >(tee -a "$raw/setup.log" >&2)
+	compose exec -T -e MCP_IT_TOKEN_MCPUSER -e MCP_IT_TOKEN_APIONLY -e MCP_IT_TOKEN_NOREALM -e MCP_IT_TOKEN_REVOKED \
+		web bash /opt/mcp-it/setup.sh "$@" > >(tee -a "$raw/setup.log") 2> >(tee -a "$raw/setup.log" >&2)
 }
 
 phase() {
@@ -98,7 +103,9 @@ on_exit() {
 	# The logs phase writes summary.md. If it never got that far (a setup phase failed,
 	# or it broke midway), do its work here so a failed run still leaves redacted logs.
 	if { [ "$current" != init ] || [ -d "$out" ]; } && [ ! -f "$out/summary.md" ]; then
-		( set -e; phase_logs ) || rc=1
+		# Run as a plain statement: set -e is ignored inside a command list tested with ||.
+		( set -e; phase_logs )
+		[ $? -eq 0 ] || rc=1
 	fi
 
 	if [ "${KEEP:-0}" = 1 ]; then
@@ -119,6 +126,18 @@ export MCP_IT_REF="$ref" MCP_IT_WEB="$web"
 MCP_IT_DB_PASSWORD="$(openssl rand -hex 16)"
 MCP_IT_DB_ROOT_PASSWORD="$(openssl rand -hex 16)"
 export MCP_IT_DB_PASSWORD MCP_IT_DB_ROOT_PASSWORD
+
+# Fixture tokens are generated here and handed to setup.sh through the environment (docker
+# exec -e NAME forwards the value without putting it on a command line). In CI each one is
+# masked before any step uses it.
+for name in MCPUSER APIONLY NOREALM REVOKED; do
+	token="cmcp_pat_$(openssl rand -hex 32)"
+	export "MCP_IT_TOKEN_$name=$token"
+	if [ "${GITHUB_ACTIONS:-}" = true ]; then
+		echo "::add-mask::$token"
+	fi
+done
+unset name token
 
 if [ -n "${2:-}" ]; then
 	[ -f "$2" ] || { echo "plugin archive not found: $2" >&2; exit 2; }
@@ -174,15 +193,6 @@ phase_install() {
 phase_plugin() {
 	setup plugin
 	setup fixtures
-
-	# In CI every token is masked before anything could print it.
-	if [ "${GITHUB_ACTIONS:-}" = true ]; then
-		local name token
-		for name in mcpuser apionly norealm revoked; do
-			token="$(in_web cat "/run/mcp-it/token-$name")"
-			echo "::add-mask::$token"
-		done
-	fi
 }
 
 phase_checks() {
@@ -285,32 +295,37 @@ phase_db_down() {
 	return "$rc"
 }
 
+# Report one unreadable log on stdout and in checks.txt, so the summary names it.
+l1_fail() {
+	echo "FAIL L1 log read error: $1" | tee -a "$raw/checks.txt"
+}
+
 # Copy the logs out of the web container. A log that cannot be read is a failure: it
 # would otherwise let a broken run look clean. Returns 1 if any read failed.
 collect_logs() {
 	local rc=0 grc apache_access='^[^ ]+ [^ ]+ [^ ]+ \[[0-9]+/[A-Za-z]+/[0-9]+:'
 	compose --profile '*' logs --no-color > "$raw/compose.log" 2>&1 \
-		|| { echo "FAIL L1 log read error: compose logs"; rc=1; }
+		|| { l1_fail "compose logs"; rc=1; }
 	# Everything the web container writes to stdout and stderr: PHP's error log, and on
 	# develop PHP-FPM's. Apache's access and error logs go there too.
 	compose logs --no-color --no-log-prefix web > "$raw/php.log" \
-		|| { echo "FAIL L1 log read error: web container output"; rc=1; }
+		|| { l1_fail "web container output"; rc=1; }
 	# exec cat as root, not a host copy: the container chowns log/ to www-data.
 	in_web cat /var/www/cacti/log/cacti.log > "$raw/cacti.log" \
-		|| { echo "FAIL L1 log read error: cacti.log"; rc=1; }
+		|| { l1_fail "cacti.log"; rc=1; }
 	if [ "$web" = nginx ]; then
 		in_web cat /var/log/nginx/access.log > "$raw/web-access.log" \
-			|| { echo "FAIL L1 log read error: nginx access log"; rc=1; }
+			|| { l1_fail "nginx access log"; rc=1; }
 		in_web cat /var/log/nginx/error.log > "$raw/web-error.log" \
-			|| { echo "FAIL L1 log read error: nginx error log"; rc=1; }
+			|| { l1_fail "nginx error log"; rc=1; }
 	else
 		# Apache logs to the container's stdout and stderr, so split what compose gave us.
 		grc=0
 		grep -E "$apache_access" "$raw/php.log" > "$raw/web-access.log" || grc=$?
-		[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: apache access log"; rc=1; }
+		[ "$grc" -le 1 ] || { l1_fail "apache access log"; rc=1; }
 		grc=0
 		grep -vE "$apache_access" "$raw/php.log" > "$raw/web-error.log" || grc=$?
-		[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: apache error log"; rc=1; }
+		[ "$grc" -le 1 ] || { l1_fail "apache error log"; rc=1; }
 	fi
 	return "$rc"
 }
@@ -390,11 +405,12 @@ write_summary() {
 phase_logs() {
 	local l1=0 grc=0 result hits
 
-	collect_logs || l1=1
-
-	# checks.txt: the PASS, FAIL and SKIP lines. grep exits 1 when there are none.
+	# checks.txt: the PASS, FAIL and SKIP lines. grep exits 1 when there are none. It is
+	# written first so collect_logs can append its L1 read errors to it.
 	grep -E '^(PASS|FAIL|SKIP) ' "$raw/checks.log" > "$raw/checks.txt" || grc=$?
-	[ "$grc" -le 1 ] || { echo "FAIL L1 log read error: checks.log"; l1=1; }
+	[ "$grc" -le 1 ] || { l1_fail "checks.log"; l1=1; }
+
+	collect_logs || l1=1
 
 	if [ "$l1" -eq 0 ]; then
 		hits="$(mktemp)"
