@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: 2026 Thomas Vincent
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Integration
+
+# Live checks against a real Cacti. Nightly and on demand only; never on pull
+# requests. Entry point is tests/integration/run.sh, the same one used locally.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      cacti:
+        description: Cacti ref to test
+        type: choice
+        options: [both, '1.2.31', develop]
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build installable plugin archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Cacti refs
+        id: matrix
+        env:
+          CACTI_INPUT: ${{ inputs.cacti }}
+        run: |
+          case "${CACTI_INPUT:-both}" in
+            both) echo 'matrix=["1.2.31","develop"]' >> "$GITHUB_OUTPUT" ;;
+            1.2.31) echo 'matrix=["1.2.31"]' >> "$GITHUB_OUTPUT" ;;
+            develop) echo 'matrix=["develop"]' >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown cacti ref: $CACTI_INPUT" >&2; exit 1 ;;
+          esac
+      - name: Build and inspect archive
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix=mcp/ HEAD > dist/mcp.tar.gz
+          mkdir /tmp/mcp-package
+          tar -xzf dist/mcp.tar.gz -C /tmp/mcp-package
+          test -f /tmp/mcp-package/mcp/INFO
+          test -f /tmp/mcp-package/mcp/setup.php
+          test -f /tmp/mcp-package/mcp/images/mcp_logo.png
+          test ! -d /tmp/mcp-package/mcp/tests
+          test ! -d /tmp/mcp-package/mcp/.github
+          cd dist
+          sha256sum mcp.tar.gz > SHA256SUMS
+      - name: Upload plugin archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mcp-plugin-integration
+          path: dist/*
+          if-no-files-found: error
+
+  live:
+    name: Cacti ${{ matrix.cacti }}
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cacti: ${{ fromJSON(needs.package.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download plugin archive
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: mcp-plugin-integration
+          path: dist
+      - name: Run live integration tests
+        env:
+          CACTI_REF: ${{ matrix.cacti }}
+        run: tests/integration/run.sh "$CACTI_REF" dist/mcp.tar.gz
+      - name: Write job summary
+        if: always()
+        env:
+          CACTI_REF: ${{ matrix.cacti }}
+        run: |
+          f="tests/integration/out/$CACTI_REF/summary.md"
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; else echo "No summary (run.sh stopped early)" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: integration-logs-${{ matrix.cacti }}
+          path: tests/integration/out/${{ matrix.cacti }}/
+          retention-days: 14
+          if-no-files-found: error

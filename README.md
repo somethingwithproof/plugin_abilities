@@ -573,6 +573,13 @@ CI lints PHP and runs the scripts in `tests/` (each is listed in
 `.github/workflows/ci.yml`) on PHP 8.2 through 8.5, then builds the installable `mcp/` archive and its checksum. Tests that touch Cacti use
 fixtures at the Cacti helper boundary; they do not exercise a full Cacti install.
 
+### Integration tests
+
+`tests/integration/run.sh 1.2.31` or `tests/integration/run.sh develop` installs the
+plugin into a real Cacti in containers and runs live checks against it. It needs Docker
+with Compose v2.23.1 or later, git and openssl. `KEEP=1` leaves the stack running for debugging. CI runs it
+nightly and on demand, not on pull requests.
+
 ## Contributing
 
 Pull requests go to `develop`. Keep production code compatible with PHP 8.2 and

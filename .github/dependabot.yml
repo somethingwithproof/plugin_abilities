@@ -12,3 +12,29 @@ updates:
     groups:
       actions:
         patterns: ['*']
+  - package-ecosystem: docker
+    directories:
+      - /tests/integration/apache
+      - /tests/integration/nginx
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+    groups:
+      images:
+        patterns: ['*']
+  - package-ecosystem: docker-compose
+    directory: /tests/integration
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+    groups:
+      compose:
+        patterns: ['*']

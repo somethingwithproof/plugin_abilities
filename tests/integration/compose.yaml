@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: 2026 Thomas Vincent
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+# Live integration stack for plugin_mcp. run.sh sets the project name
+# (mcp-it-1231 or mcp-it-develop), so every container, network and volume is
+# prefixed mcp-it-. No service publishes a host port.
+#
+# Variables set by run.sh: MCP_IT_REF (1.2.31 or develop), MCP_IT_WEB (apache
+# or nginx), MCP_IT_TARBALL (absolute path of the plugin archive) and the two
+# generated database passwords.
+name: mcp-it
+
+services:
+  db:
+    image: mariadb:11.4@sha256:5e73baf8179b29f115101bb102763a47a017361f3e9792daccba6646c3ab1532
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MCP_IT_DB_ROOT_PASSWORD:-}
+      MARIADB_DATABASE: cacti
+      MARIADB_USER: cactiuser
+      MARIADB_PASSWORD: ${MCP_IT_DB_PASSWORD:-}
+    configs:
+      - source: db-init
+        target: /docker-entrypoint-initdb.d/10-cacti.sh
+        mode: 0755
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+  web:
+    build:
+      context: ./${MCP_IT_WEB:-apache}
+    image: mcp-it-web-${MCP_IT_WEB:-apache}
+    environment:
+      DB_HOST: db
+      DB_NAME: cacti
+      DB_USER: cactiuser
+      DB_PASSWORD: ${MCP_IT_DB_PASSWORD:-}
+      MCP_IT_REF: ${MCP_IT_REF:-}
+    volumes:
+      - ./src/${MCP_IT_REF:-develop}:/var/www/cacti
+      - ./setup.sh:/opt/mcp-it/setup.sh:ro
+      - ${MCP_IT_TARBALL:-/dev/null}:/opt/mcp-it/mcp.tar.gz:ro
+      - mcp-it-secrets:/run/mcp-it
+    # A PHP path that does not exist: Apache or nginx plus PHP-FPM must answer it (404),
+    # not a gateway error, and a static file must be served.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -o /dev/null http://localhost/cacti/include/themes/modern/main.css &&
+          [ "$$(curl -s -o /dev/null -w '%{http_code}' http://localhost/cacti/mcp-it-health.php)" = 404 ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 5s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  checks:
+    image: php:8.4-cli@sha256:6a1e9013da1446d8f430c46d29421c7f960417f4ac0f0a67f1c84f860753766f
+    profiles: [tools]
+    network_mode: service:web
+    working_dir: /checks
+    volumes:
+      - ./checks.php:/checks/checks.php:ro
+      - mcp-it-secrets:/run/mcp-it
+    depends_on:
+      - web
+
+  inspector:
+    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    profiles: [tools]
+    network_mode: service:web
+    volumes:
+      - mcp-it-secrets:/run/mcp-it
+    depends_on:
+      - web
+
+# Tokens and passwords live only in memory: a tmpfs volume shared by web, checks
+# and inspector, gone when the stack is removed with down -v.
+volumes:
+  mcp-it-secrets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1m,mode=1777
+
+# Runs once on first start: load the time zone tables Cacti's installer needs,
+# then let cactiuser read them. The grant is last, so setup.sh waits on it.
+configs:
+  db-init:
+    content: |
+      #!/bin/sh
+      set -eu
+      mariadb-tzinfo-to-sql /usr/share/zoneinfo | mariadb -uroot -p"$$MARIADB_ROOT_PASSWORD" mysql
+      mariadb -uroot -p"$$MARIADB_ROOT_PASSWORD" -e "GRANT SELECT ON mysql.time_zone_name TO 'cactiuser'@'%'; FLUSH PRIVILEGES;"
