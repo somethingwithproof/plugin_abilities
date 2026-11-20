@@ -47,6 +47,18 @@ services:
       - ./setup.sh:/opt/mcp-it/setup.sh:ro
       - ${MCP_IT_TARBALL:-/dev/null}:/opt/mcp-it/mcp.tar.gz:ro
       - mcp-it-secrets:/run/mcp-it
+    # A PHP path that does not exist: Apache or nginx plus PHP-FPM must answer it (404),
+    # not a gateway error, and a static file must be served.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -o /dev/null http://localhost/cacti/include/themes/modern/main.css &&
+          [ "$$(curl -s -o /dev/null -w '%{http_code}' http://localhost/cacti/mcp-it-health.php)" = 404 ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 5s
     depends_on:
       db:
         condition: service_healthy

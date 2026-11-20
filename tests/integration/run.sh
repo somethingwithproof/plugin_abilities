@@ -181,6 +181,7 @@ phase_plugin() {
 
 phase_checks() {
 	compose run --rm -T checks php /checks/checks.php --ref="$ref" --phase=smoke 2>&1 | tee "$out/checks.log"
+	compose run --rm -T checks php /checks/checks.php --ref="$ref" --phase=main 2>&1 | tee -a "$out/checks.log"
 }
 
 phase_inspector() {

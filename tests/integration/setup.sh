@@ -117,7 +117,7 @@ cmd_fixtures() {
 	api="$(api_realm)"
 
 	ADMIN_PW="$(openssl rand -hex 16)" GUEST_PW="$(openssl rand -hex 16)" \
-	OTHER_PW="$(openssl rand -hex 16)" API_REALM="$api" php <<'PHP'
+	OTHER_PW="$(openssl rand -hex 16)" MCPUSER_PW="$(openssl rand -hex 16)" API_REALM="$api" php <<'PHP'
 <?php
 // Users are copies of the admin row, so every column the running Cacti version needs
 // has a valid value, then get their own name, a hashed password and an explicit realm list.
@@ -134,7 +134,7 @@ $users = [
 $ids = [];
 
 foreach ($users as $name => $realms) {
-	$hash = password_hash(getenv($name === 'guestu' ? 'GUEST_PW' : 'OTHER_PW'), PASSWORD_DEFAULT);
+	$hash = password_hash(getenv(['guestu' => 'GUEST_PW', 'mcpuser' => 'MCPUSER_PW'][$name] ?? 'OTHER_PW'), PASSWORD_DEFAULT);
 	$db->query("DROP TEMPORARY TABLE IF EXISTS user_tpl");
 	$db->query("CREATE TEMPORARY TABLE user_tpl AS SELECT * FROM user_auth WHERE username = 'admin'");
 	$stmt = $db->prepare("UPDATE user_tpl SET id = 0, username = ?, full_name = ?, password = ?, realm = 0, enabled = 'on', must_change_password = ''");
@@ -161,6 +161,7 @@ $db->query("REPLACE INTO settings (name, value) VALUES ('mcp_public_url', 'http:
 umask(0077);
 file_put_contents('/run/mcp-it/admin-password', getenv('ADMIN_PW'));
 file_put_contents('/run/mcp-it/guestu-password', getenv('GUEST_PW'));
+file_put_contents('/run/mcp-it/mcpuser-password', getenv('MCPUSER_PW'));
 file_put_contents('/run/mcp-it/ids.json', json_encode(['guestu' => $ids['guestu'], 'mcpuser' => $ids['mcpuser']]));
 PHP
 
