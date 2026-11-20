@@ -663,6 +663,13 @@ function phase_d3_open() : void {
 	file_put_contents(D3_STATE, json_encode($state, JSON_THROW_ON_ERROR));
 }
 
+/*
+ * D3 detection power differs by ref. On 1.2.31 the stale-read regression is detectable: the session keeps
+ * the old guest_user, so the plugin's forced read is what stops a token. On develop Cacti ends the session
+ * of an account that becomes the guest and reads guest_user fresh, so D3 there only guards that no token
+ * is minted and the row count is unchanged; the stale-read regression is detectable on 1.2.31 only.
+ */
+
 /** D3, second half: reload both pages after guest_user is set, then try to create a token for guestu. */
 function phase_d3_finish() : void {
 	$state = json_decode((string) @file_get_contents(D3_STATE), true) ?: [];
@@ -696,9 +703,19 @@ function phase_d3_finish() : void {
 				}
 			}
 			// Cacti may already have ended the session of an account that is now the guest; the reload is
-			// then the login page, whose form belongs to a new session. Use the values saved at open.
-			$ended = str_contains($page['body'], 'login_username');
-			$nonce = ($ended ? null : hidden_value($page['body'], 'mcp_nonce')) ?? $state[$key]['nonce'];
+			// then the login page, whose form belongs to a new session. The guest's own page may also
+			// withhold the form. Only in those cases are the nonce and CSRF token saved at open reused,
+			// as a stale browser tab would. The admin page must always offer the form.
+			$ended    = str_contains($page['body'], 'login_username');
+			$fallback = $ended || $key === 'self';
+			$nonce    = $ended ? null : hidden_value($page['body'], 'mcp_nonce');
+
+			if ($nonce === null) {
+				if (!$fallback) {
+					return 'no nonce on page';
+				}
+				$nonce = $state[$key]['nonce'];
+			}
 
 			try {
 				if ($ended) {
@@ -706,6 +723,9 @@ function phase_d3_finish() : void {
 				}
 				[$csrfName, $csrfValue] = csrf_field($page['body']);
 			} catch (RuntimeException $error) {
+				if (!$fallback) {
+					return $error->getMessage();
+				}
 				[$csrfName, $csrfValue] = $state[$key]['csrf'];
 			}
 			$fields = ['action' => 'create_token', 'days' => '1', 'mcp_nonce' => $nonce, $csrfName => $csrfValue];
