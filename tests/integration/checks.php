@@ -491,7 +491,10 @@ function phase_main(string $ref) : void {
 			return $reason;
 		}
 
-		return (decode($response)['result']['tools'] ?? null) === [] ? null : 'result.tools is not an empty list';
+		// Object mode: an empty JSON object decodes to stdClass, which is not a list; only [] is.
+		$body = json_decode($response['body']);
+
+		return ($body->result->tools ?? null) === [] ? null : 'result.tools is not an empty list';
 	});
 
 	check('C6b', 'apionly :execute is ABILITY_NOT_FOUND, same as an unknown id', function () use ($apionly) {
@@ -652,8 +655,7 @@ function phase_d3_open() : void {
 			if ($key === 'admin' && !in_array(guestu_id(), user_dropdown_ids($page['body']) ?? [], true)) {
 				return 'the User dropdown does not list guestu before the change, so the later absence proves nothing';
 			}
-			// Kept for the case where the reloaded page no longer offers the form: a stale tab would
-			// still hold this nonce and CSRF token.
+			// The create POST in d3-finish replays these from this session, as a tab left open would.
 			$state[$key] = ['nonce' => $nonce, 'csrf' => csrf_field($page['body'])];
 
 			return null;
@@ -664,13 +666,39 @@ function phase_d3_open() : void {
 }
 
 /*
- * D3 detection power differs by ref. On 1.2.31 the stale-read regression is detectable: the session keeps
- * the old guest_user, so the plugin's forced read is what stops a token. On develop Cacti ends the session
- * of an account that becomes the guest, so D3 there only guards that no token
- * is minted and the row count is unchanged; the stale-read regression is detectable on 1.2.31 only.
+ * Order matters for detection power. The create POST is sent from the session opened in d3-open,
+ * with the nonce and CSRF token saved then, before anything reloads a page in that session: both
+ * the admin form and the create path force a fresh guest_user read, so a reload would refresh the
+ * session's cached value and hide a create path that went back to a cached read. The User dropdown
+ * is checked afterwards in a new session.
+ *
+ * On 1.2.31 the session keeps the old guest_user, so the plugin's forced read is what stops the
+ * token. On develop Cacti ends the session of an account that becomes the guest, so D3a there
+ * only guards that no token is minted; the stale-read regression is detectable on 1.2.31 only.
  */
 
-/** D3, second half: reload both pages after guest_user is set, then try to create a token for guestu. */
+/**
+ * Send the create POST for one D3 page from its d3-open session. A redirect is followed once with the
+ * same session, as a browser would.
+ */
+function d3_create_post(string $key, string $path, string $jar, array $saved) : array {
+	$fields = ['action' => 'create_token', 'days' => '1', 'mcp_nonce' => $saved['nonce'], $saved['csrf'][0] => $saved['csrf'][1]];
+
+	if ($key === 'admin') {
+		$fields['user_id'] = (string) guestu_id();
+	}
+	$post = http('POST', BASE . '/' . strtok($path, '?'), ['Content-Type: application/x-www-form-urlencoded'], http_build_query($fields), $jar);
+
+	if ($post['status'] === 302 && ($post['headers']['location'][0] ?? '') !== '') {
+		$location = $post['headers']['location'][0];
+		$next     = str_starts_with($location, 'http') ? $location : 'http://localhost' . (str_starts_with($location, '/') ? '' : '/cacti/') . $location;
+		$post     = http('GET', $next, [], null, $jar);
+	}
+
+	return $post;
+}
+
+/** D3, second half: try to create a token for guestu, then check what the admin form offers. */
 function phase_d3_finish() : void {
 	$state = json_decode((string) @file_get_contents(D3_STATE), true) ?: [];
 
@@ -683,81 +711,40 @@ function phase_d3_finish() : void {
 			if (!is_file($jar) || !isset($state[$key])) {
 				return "no session from the d3-open phase for $user";
 			}
-			$page   = http('GET', BASE . '/' . $path, [], null, $jar);
-			$reason = [];
-
-			if ($page['status'] !== 200) {
-				return 'reload returned status ' . $page['status'];
-			}
-
-			if ($key === 'admin') {
-				$ids = user_dropdown_ids($page['body']);
-
-				if ($ids === null) {
-					// No dropdown on the page means it offers nobody, so guestu cannot be in it; treat that as an empty list.
-					$ids = [];
-				}
-
-				if (in_array(guestu_id(), $ids, true)) {
-					$reason[] = 'guestu is still in the User dropdown';
-				}
-			}
-			// Cacti may already have ended the session of an account that is now the guest; the reload is
-			// then the login page, whose form belongs to a new session. The guest's own page may also
-			// withhold the form. Only in those cases are the nonce and CSRF token saved at open reused,
-			// as a stale browser tab would. The admin page must always offer the form.
-			$ended    = str_contains($page['body'], 'login_username');
-			$fallback = $ended || $key === 'self';
-			$nonce    = $ended ? null : hidden_value($page['body'], 'mcp_nonce');
-
-			if ($nonce === null) {
-				if (!$fallback) {
-					return 'no nonce on page';
-				}
-				$nonce = $state[$key]['nonce'];
-			}
-
-			try {
-				if ($ended) {
-					throw new RuntimeException('session ended');
-				}
-				[$csrfName, $csrfValue] = csrf_field($page['body']);
-			} catch (RuntimeException $error) {
-				if (!$fallback) {
-					return $error->getMessage();
-				}
-				[$csrfName, $csrfValue] = $state[$key]['csrf'];
-			}
-			$fields = ['action' => 'create_token', 'days' => '1', 'mcp_nonce' => $nonce, $csrfName => $csrfValue];
-
-			if ($key === 'admin') {
-				$fields['user_id'] = (string) guestu_id();
-			}
-			$post = http('POST', BASE . '/' . strtok($path, '?'), ['Content-Type: application/x-www-form-urlencoded'], http_build_query($fields), $jar);
-
-			// A redirect is followed once with the same session, as a browser would.
-			if ($post['status'] === 302 && ($post['headers']['location'][0] ?? '') !== '') {
-				$location = $post['headers']['location'][0];
-				$next     = str_starts_with($location, 'http') ? $location : 'http://localhost' . (str_starts_with($location, '/') ? '' : '/cacti/') . $location;
-				$post     = http('GET', $next, [], null, $jar);
-			}
+			$post = d3_create_post($key, $path, $jar, $state[$key]);
 
 			if (str_contains($post['body'], 'cmcp_pat_')) {
-				$reason[] = 'a token was created for guestu';
-			} elseif ($post['status'] !== 200 || !(str_contains($post['body'], REFUSAL_TEXT) || str_contains($post['body'], 'login_username'))) {
-				// Two refusals are real: the plugin's own message, or Cacti ending the session of an
-				// account that is now the guest (the plugin's forced read refreshes the cached setting,
-				// so the request after it meets Cacti's own guest check). Anything else is unexplained.
-				$reason[] = 'the POST (status ' . $post['status'] . ') was neither refused by the plugin nor answered with the login page';
+				return 'a token was created for guestu';
 			}
+			// The plugin's own message is a real refusal for both. Only the guest's own request may instead
+			// meet the login page: Cacti ends the session of an account that is now the guest. The admin's
+			// session stays valid, so a login page there means the POST was never authenticated.
+			$refused = str_contains($post['body'], REFUSAL_TEXT) || ($key === 'self' && str_contains($post['body'], 'login_username'));
 
-			return $reason ? implode('; ', $reason) : null;
+			return $post['status'] === 200 && $refused ? null : 'the POST (status ' . $post['status'] . ') was not refused by the plugin' . ($key === 'self' ? ' nor answered with the login page' : '');
 		});
 	}
+
+	check('D3b', 'guestu is not offered in the admin User dropdown', function () {
+		// A new session, so the reload cannot touch the one used for the POST above.
+		$jar  = web_login('admin', 'admin-password', SECRETS . '/jar-admin-dropdown');
+		$page = http('GET', BASE . '/' . D3_PAGES['admin'][0], [], null, $jar);
+
+		if ($page['status'] !== 200 || str_contains($page['body'], 'login_username')) {
+			return 'the admin token page did not load as admin (status ' . $page['status'] . ')';
+		}
+
+		if (hidden_value($page['body'], 'mcp_nonce') === null) {
+			return 'no create form on the admin page';
+		}
+		// No dropdown on the page means it offers nobody, so guestu cannot be in it.
+		return in_array(guestu_id(), user_dropdown_ids($page['body']) ?? [], true) ? 'guestu is still in the User dropdown' : null;
+	});
 
 	foreach (array_column(D3_PAGES, 3) as $jarName) {
 		@unlink(SECRETS . '/' . $jarName);
 	}
+	@unlink(SECRETS . '/jar-admin-dropdown');
 	@unlink(D3_STATE);
 }
 
@@ -770,8 +757,12 @@ function phase_db_down_prep() : void {
 	});
 }
 
-/** The reason a response is not a clean 503 JSON error, or null. */
-function unavailable_reason(array $response) : ?string {
+/**
+ * The reason a response is not a clean 503 JSON error in the given format, or null. 'jsonrpc' is the
+ * mcp.php shape (error.data), 'aip193' the api.php shape (error.status, error.details); the other
+ * endpoint's shape is rejected.
+ */
+function unavailable_reason(array $response, string $format) : ?string {
 	if ($reason = want_status($response, 503)) {
 		return $reason;
 	}
@@ -797,9 +788,14 @@ function unavailable_reason(array $response) : ?string {
 	if (isset($response['headers']['set-cookie'])) {
 		return 'response sets a cookie';
 	}
-	$data   = $json['error']['data'] ?? null;
-	$status = is_array($data) ? ($data['status'] ?? null) : ($json['error']['status'] ?? null);
-	$why    = is_array($data) ? ($data['reason'] ?? null) : ($json['error']['details'][0]['reason'] ?? null);
+
+	if ($format === 'jsonrpc') {
+		$status = $json['error']['data']['status'] ?? null;
+		$why    = $json['error']['data']['reason'] ?? null;
+	} else {
+		$status = $json['error']['status'] ?? null;
+		$why    = $json['error']['details'][0]['reason'] ?? null;
+	}
 
 	return $status === 'UNAVAILABLE' && $why === 'CACTI_UNAVAILABLE' ? null : 'error is not UNAVAILABLE/CACTI_UNAVAILABLE';
 }
@@ -822,19 +818,19 @@ function phase_db_down() : void {
 	$exec = '/v1/abilities/cacti-get-system-info:execute';
 
 	$requests = [
-		'mcp.php tools/list'    => fn (bool $cookie) => http('POST', MCP_URL, array_merge($modern, ['Authorization: Bearer ' . $token]), $list, $cookie ? $jar : null),
-		'api.php abilities'     => fn (bool $cookie) => http('GET', API_URL . '/v1/abilities', ['Authorization: Bearer ' . $token], null, $cookie ? $jar : null),
-		'api.php :execute'      => fn (bool $cookie) => http('POST', API_URL . $exec, ['Content-Type: application/json', 'Authorization: Bearer ' . $token], '{"arguments":{}}', $cookie ? $jar : null),
+		'mcp.php tools/list'    => ['jsonrpc', fn (bool $cookie) => http('POST', MCP_URL, array_merge($modern, ['Authorization: Bearer ' . $token]), $list, $cookie ? $jar : null)],
+		'api.php abilities'     => ['aip193', fn (bool $cookie) => http('GET', API_URL . '/v1/abilities', ['Authorization: Bearer ' . $token], null, $cookie ? $jar : null)],
+		'api.php :execute'      => ['aip193', fn (bool $cookie) => http('POST', API_URL . $exec, ['Content-Type: application/json', 'Authorization: Bearer ' . $token], '{"arguments":{}}', $cookie ? $jar : null)],
 	];
 
 	foreach ([false, true] as $cookie) {
-		foreach ($requests as $label => $send) {
-			check('D2', ($cookie ? 'bearer token and session cookie' : 'bearer token') . " on $label", function () use ($send, $cookie, $jar) {
+		foreach ($requests as $label => [$format, $send]) {
+			check('D2', ($cookie ? 'bearer token and session cookie' : 'bearer token') . " on $label", function () use ($send, $format, $cookie, $jar) {
 				if ($cookie && !is_file($jar)) {
 					return 'no session: the db-down-prep phase failed';
 				}
 
-				return unavailable_reason($send($cookie));
+				return unavailable_reason($send($cookie), $format);
 			});
 		}
 	}

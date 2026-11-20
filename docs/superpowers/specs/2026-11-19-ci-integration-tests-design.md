@@ -212,7 +212,7 @@ D3 follows the Task 13 reproduction:
    1.2.31, the develop token on develop.
 2. It opens My MCP Tokens.
 3. `setup.sh guest-on` sets `guest_user` to `guestu`'s id.
-4. The script reloads the page and POSTs `create` with the fresh nonce.
+4. The script POSTs `create` from that session with the nonce and CSRF token saved in step 2, without reloading first. A reload would refresh the session's cached `guest_user` and hide a create path that stopped forcing the read.
 
 It passes when the response holds no `cmcp_pat_` value and the
 `plugin_mcp_token` row count for `guestu` is unchanged. `setup.sh` reports that
@@ -223,9 +223,12 @@ paths. It runs as `admin`, whose session is opened before `guest-on`:
 
 1. Open Management > MCP > Tokens.
 2. Set `guest_user`.
-3. Reload. `guestu` must be absent from the User dropdown.
-4. POST `create_token` with `user_id` set to `guestu`'s id. No token may be
-   created.
+3. POST `create_token` from that session, with `user_id` set to `guestu`'s id,
+   using the nonce and CSRF token saved at step 1. No token may be created, and
+   the response must be the plugin's refusal; a login page does not count for
+   the admin.
+4. In a new admin session, load the form. `guestu` must be absent from the
+   User dropdown.
 
 `setup.sh` sets the `admin` password to a generated value and clears
 `must_change_password`, so the scripted login doesn't stop at the forced
@@ -287,18 +290,20 @@ Warnings from Cacti core, such as N2 in `lib/html.php`, are not gated.
   3. `tests/integration/run.sh ${{ matrix.cacti }} dist/mcp.tar.gz`.
   4. Upload logs.
 - **Job summary:** the PASS and FAIL lines, the Cacti ref and commit, and the
-  plugin commit.
+  identity of the installed plugin archive (its source commit when `git archive`
+  recorded one, and its SHA-256).
 - **Artifact:** on every run, pass or fail, the job uploads the Cacti log, the
   web server access and error logs, the PHP-FPM log, and `checks.php` output.
   `run.sh` replaces anything matching `cmcp_pat_[A-Za-z0-9_-]+` with
-  `cmcp_pat_REDACTED` before upload, and then fails the job if the pattern
-  still appears. Retention is 14 days.
+  `cmcp_pat_REDACTED` into a staging directory, scans it, and moves it to the
+  upload path only if no token remains; otherwise the job fails and only a fixed
+  summary is uploaded. Retention is 14 days.
 
 A failed run reports the normal Actions way. There is no extra notification.
 
 ### Local use
 
-`tests/integration/run.sh develop` needs only Docker with Compose v2 and git.
+`tests/integration/run.sh develop` needs only Docker with Compose v2.23.1 or later and git.
 It leaves the stack up when `KEEP=1` is set, for debugging, and otherwise tears
 everything down, volumes included. Every container, network and volume is
 prefixed `mcp-it-` so cleanup can be checked.

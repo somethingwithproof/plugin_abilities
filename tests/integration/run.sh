@@ -6,7 +6,7 @@
 #
 #   tests/integration/run.sh <1.2.31|develop> [path/to/mcp.tar.gz]
 #
-# Needs Docker with Compose v2, git and openssl on the host. With no archive
+# Needs Docker with Compose v2.23.1 or later, git and openssl on the host. With no archive
 # argument it builds one from HEAD the way ci.yml does. KEEP=1 leaves the stack
 # running for debugging; otherwise everything, volumes included, is removed.
 #
@@ -37,6 +37,9 @@ src="$here/src/$ref"
 # redacted copies are written into out/, so nothing a workflow uploads can hold a token
 # whatever happens to the run. src/ is gitignored.
 raw="$here/src/raw-$ref"
+# Redacted copies are written and scanned here, and moved to out/ only when the scan passes, so
+# an upload step that runs after a cancelled job never finds files that were not scanned.
+stage="$here/src/stage-$ref"
 
 # Pinned image used for host-side cleanup of files a container created as root.
 cli_image="$(sed -n 's/^ *image: \(php:8\.4-cli@sha256:[0-9a-f]*\)$/\1/p' "$here/compose.yaml")"
@@ -51,6 +54,8 @@ fi
 
 current=init
 cacti_commit=unknown
+plugin_commit=unknown
+plugin_sha256=unknown
 failed_phases=()
 
 compose() {
@@ -63,11 +68,17 @@ in_web() {
 }
 
 # Every setup step's output is also kept in raw/setup.log, so the L1 scan covers warnings
-# from plugin code run under the CLI (plugin_manage.php, tokens.php). tee passes stdout
-# through, so callers that capture a value still get it.
+# from plugin code run under the CLI (plugin_manage.php, tokens.php). Each stream goes through
+# its own tee and back to its own descriptor, so a caller that captures a value still gets only
+# stdout. pipefail makes setup fail when a tee cannot write the log, not just when the step
+# fails: L1 would otherwise scan a log that silently lacks the step's warnings.
 setup() {
-	compose exec -T -e MCP_IT_TOKEN_MCPUSER -e MCP_IT_TOKEN_APIONLY -e MCP_IT_TOKEN_NOREALM -e MCP_IT_TOKEN_REVOKED \
-		web bash /opt/mcp-it/setup.sh "$@" > >(tee -a "$raw/setup.log") 2> >(tee -a "$raw/setup.log" >&2)
+	{
+		{
+			compose exec -T -e MCP_IT_TOKEN_MCPUSER -e MCP_IT_TOKEN_APIONLY -e MCP_IT_TOKEN_NOREALM -e MCP_IT_TOKEN_REVOKED \
+				web bash /opt/mcp-it/setup.sh "$@" 2>&1 1>&3 | tee -a "$raw/setup.log" >&2
+		} 3>&1
+	} | tee -a "$raw/setup.log"
 }
 
 phase() {
@@ -154,7 +165,7 @@ if ! compose --profile '*' down -v --remove-orphans > /dev/null 2>&1; then
 fi
 echo "docker server $(docker version --format '{{.Server.Version}}'), client $(docker version --format '{{.Client.Version}}')"
 docker compose version
-rm -rf "$out" "$raw"
+rm -rf "$out" "$raw" "$stage"
 mkdir -p "$out" "$raw"
 : > "$raw/checks.log"
 : > "$raw/setup.log"
@@ -174,6 +185,14 @@ phase_clone() {
 		git -C "$repo" archive --format=tar.gz --prefix=mcp/ HEAD > "$tarball"
 	fi
 	export MCP_IT_TARBALL="$tarball"
+
+	# The archive that is installed, not the checkout: it may have been built from another commit.
+	# git archive records its commit in the tar header; any other archive is identified by checksum.
+	# get-tar-commit-id stops reading early, so pipefail is off for this one pipeline.
+	plugin_commit="$(set +o pipefail; gzip -dc "$tarball" 2> /dev/null | git get-tar-commit-id 2> /dev/null)" || plugin_commit="unknown (not a git archive)"
+	[ -n "$plugin_commit" ] || plugin_commit="unknown (not a git archive)"
+	plugin_sha256="$(openssl dgst -sha256 -r "$tarball" | cut -d' ' -f1)"
+	echo "Plugin archive: sha256 $plugin_sha256, commit $plugin_commit"
 }
 
 phase_build() {
@@ -330,29 +349,30 @@ collect_logs() {
 	return "$rc"
 }
 
-# Write a redacted copy of every file under raw/ to the same relative path under out/,
+# Write a redacted copy of every file under raw/ to the same relative path under stage/,
 # replacing each token with cmcp_pat_REDACTED. LC_ALL=C and a pipe through sed handle
 # binary content on BSD and GNU sed alike. Any failure returns 1.
 redact_to_out() {
 	local list f rel
 	list="$(mktemp)"
+	rm -rf "$stage" && mkdir -p "$stage" || return 1
 	find "$raw" -type f -print0 > "$list" || { rm -f "$list"; return 1; }
 	while IFS= read -r -d '' f; do
 		rel="${f#"$raw"/}"
-		mkdir -p "$(dirname "$out/$rel")" || { rm -f "$list"; return 1; }
-		LC_ALL=C sed -E 's/cmcp_pat_[A-Za-z0-9_-]+/cmcp_pat_REDACTED/g' "$f" > "$out/$rel" || { rm -f "$list"; return 1; }
+		mkdir -p "$(dirname "$stage/$rel")" || { rm -f "$list"; return 1; }
+		LC_ALL=C sed -E 's/cmcp_pat_[A-Za-z0-9_-]+/cmcp_pat_REDACTED/g' "$f" > "$stage/$rel" || { rm -f "$list"; return 1; }
 	done < "$list"
 	rm -f "$list"
 }
 
-# Any cmcp_pat_ value other than the placeholder left in out/ is a leak. -a makes grep
+# Any cmcp_pat_ value other than the placeholder left in stage/ is a leak. -a makes grep
 # search binary files as text; without it a file with a NUL byte matches silently. grep
 # exits 1 for no match, which is the pass case; above 1 is an error and also fails.
 scan_out_for_tokens() {
 	local found rest rc=0
 	found="$(mktemp)"
 	rest="$(mktemp)"
-	LC_ALL=C grep -a -rhoE 'cmcp_pat_[A-Za-z0-9_-]+' "$out" > "$found" || rc=$?
+	LC_ALL=C grep -a -rhoE 'cmcp_pat_[A-Za-z0-9_-]+' "$stage" > "$found" || rc=$?
 	if [ "$rc" -le 1 ]; then
 		rc=0
 		LC_ALL=C grep -a -vx cmcp_pat_REDACTED "$found" > "$rest" || rc=$?
@@ -378,6 +398,8 @@ first_failure() {
 # left in the uploaded path. The text is fixed and holds no run output.
 withhold_out() {
 	local why="$1"
+	rm -rf "$stage"
+	mkdir -p "$out"
 	find "$out" -mindepth 1 -delete
 	{
 		echo "Result: $(first_failure)"
@@ -394,7 +416,8 @@ write_summary() {
 		echo "Result: $result"
 		echo "Cacti ref: $ref"
 		echo "Cacti commit: $cacti_commit"
-		echo "Plugin commit: $(git -C "$repo" rev-parse HEAD)"
+		echo "Plugin commit: $plugin_commit"
+		echo "Plugin archive sha256: $plugin_sha256"
 		echo
 		cat "$raw/checks.txt"
 	} > "$raw/summary.md"
@@ -452,9 +475,16 @@ phase_logs() {
 		return 1
 	fi
 
-	# Last: after every file in out/ is written.
+	# Last: after every file in stage/ is written.
 	if ! scan_out_for_tokens; then
 		withhold_out "FAIL R1 token left in artifacts (files withheld)"
+		return 1
+	fi
+
+	# Scanned clean: publish. A rename keeps out/ from ever holding a partial or unscanned set.
+	if ! { rm -rf "$out" && mv "$stage" "$out"; }; then
+		echo "FAIL R1 could not publish the scanned logs"
+		withhold_out "FAIL R1 publish failed; all logs withheld"
 		return 1
 	fi
 	[ "$l1" -eq 0 ]
